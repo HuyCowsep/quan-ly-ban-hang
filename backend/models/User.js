@@ -22,6 +22,8 @@ const userSchema = new mongoose.Schema(
       default: "/default-avatar.png", // 👈 Thêm default value
       trim: true,
     },
+    image_thumb: { type: String }, // Thumbnail URL
+    image_delete_url: { type: String }, // Delete URL for cleanup
     fullname: { type: String, default: "" },
 
     // role global (MANAGER: có thể tạo store; STAFF: nhân viên)
@@ -78,8 +80,13 @@ const userSchema = new mongoose.Schema(
       default: false,
     },
 
-    // Other
+    // Other, check đi làm
     last_login: { type: Date, default: null },
+    last_logout: { type: Date },
+    last_ip: { type: String },
+    last_user_agent: { type: String },
+    online_duration_today: { type: Number, default: 0 }, // phút online hôm nay
+
     isDeleted: { type: Boolean, default: false },
     deletedAt: { type: Date, default: null },
     restoredAt: { type: Date, default: null },

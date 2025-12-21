@@ -1,18 +1,18 @@
 // pages/settings/PricingPage.jsx
 import React, { useState, useEffect } from "react";
-import { Card, Button, Row, Col, Typography, Badge, Space, Spin, message, Modal } from "antd";
+import { Card, Button, Row, Col, Typography, Badge, Space, Spin, message } from "antd";
 import { CheckOutlined, CrownOutlined, RocketOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import subscriptionApi from "../../api/subscriptionApi";
 import Layout from "../../components/Layout";
 import Swal from "sweetalert2";
-import { useAuth } from "../../context/AuthContext";
 
 const { Title, Text, Paragraph } = Typography;
 
+const formatCurrency = (value) => Number(value || 0).toLocaleString("vi-VN");
+
 const PricingPage = () => {
   const navigate = useNavigate();
-  const { setManagerSubscriptionExpired } = useAuth();
   const [plans, setPlans] = useState([]);
   const [currentSub, setCurrentSub] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -26,10 +26,7 @@ const PricingPage = () => {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [plansRes, subRes] = await Promise.all([
-        subscriptionApi.getPlans(),
-        subscriptionApi.getCurrentSubscription().catch(() => null),
-      ]);
+      const [plansRes, subRes] = await Promise.all([subscriptionApi.getPlans(), subscriptionApi.getCurrentSubscription().catch(() => null)]);
 
       setPlans(plansRes.data.plans || []);
       setCurrentSub(subRes?.data || null);
@@ -48,11 +45,11 @@ const PricingPage = () => {
         {
           duration: 1,
           label: "1 tháng",
-          price: 199000,
-          original_price: 199000,
+          price: 5000,
+          original_price: 10000,
           discount: 0,
           discount_percent: 0,
-          price_per_month: 199000,
+          price_per_month: 5000,
           badge: null,
         },
         {
@@ -148,12 +145,10 @@ const PricingPage = () => {
               : ""
           }
           <p style="margin-top: 12px;">
-            Giá: <strong style="color: #22c55e; font-size: 18px;">${selectedPlan.price.toLocaleString(
-              "vi-VN"
-            )}đ</strong>
+            Giá: <strong style="color: #22c55e; font-size: 18px;">${selectedPlan.price.toLocaleString("vi-VN")}đ</strong>
           </p>
           <p style="margin-top: 8px; font-size: 13px; color: #999;">
-            (Do chưa tích hợp PayOS, gói sẽ được kích hoạt ngay lập tức)
+            Sau khi xác nhận, bạn sẽ được chuyển hướng đến trang thanh toán PayOS.
           </p>
         </div>
       `,
@@ -166,44 +161,22 @@ const PricingPage = () => {
       width: 500,
     }).then(async (result) => {
       if (result.isConfirmed) {
-        console.log("✅ User confirmed, activating premium...");
+        console.log("✅ User confirmed, creating PayOS checkout...");
         try {
           setProcessingPlan(duration);
+          const checkoutRes = await subscriptionApi.createCheckout({ plan_duration: duration });
+          const checkoutData = checkoutRes?.data || {};
 
-          // Direct activate premium (skip PayOS)
-          const planInfo = plans.find((p) => p.duration === duration);
-
-          if (!planInfo) {
-            Swal.fire("Lỗi", "Không tìm thấy thông tin gói", "error");
-            setProcessingPlan(null);
-            return;
+          const checkoutUrl = checkoutData.checkout_url || checkoutData.checkoutUrl || checkoutData.paymentLink || checkoutData.payment_link;
+          // Redirect thẳng sang PayOS
+          if (checkoutUrl) {
+            window.location.href = checkoutUrl;
+          } else {
+            throw new Error("Không tìm thấy link thanh toán");
           }
-
-          const response = await subscriptionApi.activatePremium({
-            plan_duration: duration,
-            amount: planInfo.price,
-            transaction_id: `MANUAL_${Date.now()}`,
-          });
-
-          console.log("Activate response:", response);
-
-          // Cập nhật trạng thái subscription trong AuthContext
-          setManagerSubscriptionExpired(false);
-
-          await Swal.fire({
-            title: "Thành công!",
-            text: "Đã kích hoạt gói Premium thành công! Menu sẽ được cập nhật ngay lập tức.",
-            icon: "success",
-            timer: 2000,
-            showConfirmButton: false,
-          });
-
-          // Reload data và navigate
-          await fetchData(); // Reload subscription data
-          navigate("/settings/subscription");
         } catch (error) {
-          console.error("Lỗi kích hoạt premium:", error);
-          const errorMsg = error.response?.data?.message || error.message || "Không thể kích hoạt Premium";
+          console.error("Lỗi tạo checkout premium:", error);
+          const errorMsg = error.response?.data?.message || error.message || "Không thể tạo thanh toán";
           Swal.fire("Lỗi", errorMsg, "error");
         } finally {
           setProcessingPlan(null);
@@ -305,9 +278,7 @@ const PricingPage = () => {
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.border = isSelected ? `3px solid ${color}` : "2px solid #e0e0e0";
-                    e.currentTarget.style.boxShadow = isSelected
-                      ? "0 8px 24px rgba(0,0,0,0.12)"
-                      : "0 2px 8px rgba(0,0,0,0.08)";
+                    e.currentTarget.style.boxShadow = isSelected ? "0 8px 24px rgba(0,0,0,0.12)" : "0 2px 8px rgba(0,0,0,0.08)";
                     e.currentTarget.style.transform = "translateY(0)";
                   }}
                 >
@@ -350,9 +321,7 @@ const PricingPage = () => {
                         {plan.price.toLocaleString("vi-VN")}đ
                       </Text>
                     </div>
-                    <Text style={{ fontSize: 14, color: "#666" }}>
-                      {plan.price_per_month.toLocaleString("vi-VN")}đ/tháng
-                    </Text>
+                    <Text style={{ fontSize: 14, color: "#666" }}>{plan.price_per_month.toLocaleString("vi-VN")}đ/tháng</Text>
                     {plan.discount_percent > 0 && (
                       <Badge
                         count={`-${plan.discount_percent}%`}

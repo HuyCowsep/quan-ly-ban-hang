@@ -16,6 +16,7 @@ import {
   message,
   Spin,
   Empty,
+  Tooltip as AntdTooltip,
 } from "antd";
 import {
   DollarOutlined,
@@ -27,7 +28,7 @@ import {
   FilePdfOutlined,
   BarChartOutlined,
   UserOutlined,
-  ShopOutlined,
+  InfoCircleOutlined,
   InboxOutlined,
   WarningOutlined,
   CheckCircleOutlined,
@@ -41,7 +42,9 @@ import Swal from "sweetalert2";
 const { Title, Text } = Typography;
 const { Option } = Select;
 
-const API_BASE = "http://localhost:9999/api";
+const apiUrl = import.meta.env.VITE_API_URL;
+
+const API_BASE = `${apiUrl}`;
 
 // Interface định nghĩa kiểu dữ liệu
 interface ReportSummary {
@@ -115,7 +118,7 @@ interface ReportData {
 }
 
 // Màu sắc cho biểu đồ
-const COLORS = ["#52c41a", "#1890ff", "#faad14", "#f5222d", "#722ed1", "#13c2c2"];
+const COLORS = ["#55ed09ff", "#1890ff", "#faad14", "#f5222d", "#722ed1", "#13c2c2"];
 
 // Mapping tên phương thức thanh toán
 const PAYMENT_METHOD_NAMES: Record<string, string> = {
@@ -141,10 +144,22 @@ const EndOfDayReport: React.FC = () => {
   const [periodType, setPeriodType] = useState<string>("day");
   const [selectedDate, setSelectedDate] = useState<Dayjs>(dayjs());
   //dùng setPagination riêng (đỡ giẫm nhau nếu người dùng lật trang nhiều bảng khác loại cùng lúc)
-  const [paginationEmployee, setPaginationEmployee] = useState({ current: 1, pageSize: 10 });
-  const [paginationProduct, setPaginationProduct] = useState({ current: 1, pageSize: 10 });
-  const [paginationRefund, setPaginationRefund] = useState({ current: 1, pageSize: 10 });
-  const [paginationStock, setPaginationStock] = useState({ current: 1, pageSize: 10 });
+  const [paginationEmployee, setPaginationEmployee] = useState({
+    current: 1,
+    pageSize: 10,
+  });
+  const [paginationProduct, setPaginationProduct] = useState({
+    current: 1,
+    pageSize: 10,
+  });
+  const [paginationRefund, setPaginationRefund] = useState({
+    current: 1,
+    pageSize: 10,
+  });
+  const [paginationStock, setPaginationStock] = useState({
+    current: 1,
+    pageSize: 10,
+  });
 
   const toNumber = (value: unknown): number => {
     if (!value) return 0;
@@ -231,8 +246,7 @@ const EndOfDayReport: React.FC = () => {
   // Format số tiền
   const formatCurrency = (value: number | any): string => {
     // Xử lý trường hợp $numberDecimal từ MongoDB
-    const numValue =
-      typeof value === "object" && value.$numberDecimal ? parseFloat(value.$numberDecimal) : Number(value);
+    const numValue = typeof value === "object" && value.$numberDecimal ? parseFloat(value.$numberDecimal) : Number(value);
     return numValue.toLocaleString("vi-VN") + "₫";
   };
 
@@ -244,7 +258,14 @@ const EndOfDayReport: React.FC = () => {
   // Render loading
   if (loading && !reportData) {
     return (
-      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          height: "100vh",
+        }}
+      >
         <Spin size="large" tip="Đang tải báo cáo..." />
       </div>
     );
@@ -316,19 +337,8 @@ const EndOfDayReport: React.FC = () => {
                 <Option value="quarter">Quý này</Option>
                 <Option value="year">Năm này</Option>
               </Select>
-              <DatePicker
-                format="DD/MM/YYYY"
-                size="large"
-                placeholder="Chọn ngày"
-                style={{ width: 180 }}
-                onChange={handleDateChange}
-              />
-              <Button
-                type="primary"
-                icon={<FilePdfOutlined />}
-                size="large"
-                style={{ background: "#ff4d4f", borderColor: "#ff4d4f" }}
-              >
+              <DatePicker format="DD/MM/YYYY" size="large" placeholder="Chọn ngày" style={{ width: 180 }} onChange={handleDateChange} />
+              <Button type="primary" icon={<FilePdfOutlined />} size="large" style={{ background: "#ff4d4f", borderColor: "#ff4d4f" }}>
                 Xuất PDF
               </Button>
             </Space>
@@ -338,116 +348,227 @@ const EndOfDayReport: React.FC = () => {
         <Text strong style={{ fontSize: 16 }}>
           {periodType === "day" && `Ngày báo cáo: ${selectedDate.format("DD/MM/YYYY")}`}
           {periodType === "month" && `Tháng báo cáo: ${selectedDate.format("MM/YYYY")}`}
-          {periodType === "quarter" &&
-            `Báo cáo quý ${Math.floor(selectedDate.month() / 3) + 1} - ${selectedDate.year()}`}
+          {periodType === "quarter" && `Báo cáo quý ${Math.floor(selectedDate.month() / 3) + 1} - ${selectedDate.year()}`}
           {periodType === "year" && `Báo cáo năm ${selectedDate.year()}`}
         </Text>
       </Card>
 
       {/* SUMMARY CARDS */}
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+        {/* 1. TỔNG ĐƠN HÀNG */}
         <Col xs={24} sm={12} lg={8}>
-          <Card
-            style={{
-              background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-              borderRadius: 12,
-              border: "none",
-            }}
-          >
-            <Statistic
-              title={<span style={{ color: "#fff", opacity: 0.9 }}>Tổng Đơn Hàng</span>}
-              value={reportData.summary.totalOrders}
-              prefix={<ShoppingOutlined />}
-              valueStyle={{ color: "#fff", fontSize: 32, fontWeight: 700 }}
-              suffix="đơn"
-            />
-          </Card>
+          <AntdTooltip title="Tổng số đơn hàng đã hoàn thành trong kỳ đã chọn">
+            <Card
+              style={{
+                background: "#84A98C",
+                borderRadius: 12,
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              <Statistic
+                title={
+                  <span
+                    style={{
+                      color: "#fff",
+                      opacity: 0.9,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      fontSize: "15px",
+                    }}
+                  >
+                    Tổng Đơn Hàng
+                    <InfoCircleOutlined style={{ color: "#1890ff", fontSize: 20 }} />
+                  </span>
+                }
+                value={reportData.summary.totalOrders}
+                prefix={<ShoppingOutlined />}
+                valueStyle={{ color: "#fff", fontSize: 32, fontWeight: 700 }}
+                suffix="đơn"
+              />
+            </Card>
+          </AntdTooltip>
         </Col>
+
+        {/* 2. DOANH THU */}
         <Col xs={24} sm={12} lg={8}>
-          <Card
-            style={{
-              background: "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)",
-              borderRadius: 12,
-              border: "none",
-            }}
-          >
-            <Statistic
-              title={<span style={{ color: "#fff", opacity: 0.9 }}>Doanh Thu Trong Ngày</span>}
-              value={reportData.summary.totalRevenue}
-              prefix={<DollarOutlined />}
-              valueStyle={{ color: "#fff", fontSize: 32, fontWeight: 700 }}
-              formatter={(value) => formatCurrency(Number(value))}
-            />
-          </Card>
+          <AntdTooltip title="Tổng doanh thu sau hóa đơn đã thanh toán">
+            <Card
+              style={{
+                background: "#3A4F50",
+                borderRadius: 12,
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              <Statistic
+                title={
+                  <span
+                    style={{
+                      color: "#fff",
+                      opacity: 0.9,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      fontSize: "15px",
+                    }}
+                  >
+                    Doanh Thu
+                    <InfoCircleOutlined style={{ color: "#1890ff", fontSize: 20 }} />
+                  </span>
+                }
+                value={reportData.summary.totalRevenue}
+                prefix={<DollarOutlined />}
+                valueStyle={{ color: "#fff", fontSize: 32, fontWeight: 700 }}
+                formatter={(value) => formatCurrency(Number(value))}
+              />
+            </Card>
+          </AntdTooltip>
         </Col>
+
+        {/* 3. VAT TỔNG */}
         <Col xs={24} sm={12} lg={8}>
-          <Card
-            style={{
-              background: "linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)",
-              borderRadius: 12,
-              border: "none",
-            }}
-          >
-            <Statistic
-              title={<span style={{ color: "#fff", opacity: 0.9 }}>VAT Tổng</span>}
-              value={reportData.summary.vatTotal}
-              prefix={<PercentageOutlined />}
-              valueStyle={{ color: "#fff", fontSize: 32, fontWeight: 700 }}
-              formatter={(value) => formatCurrency(Number(value))}
-            />
-          </Card>
+          <AntdTooltip title="Tổng VAT thu được trong kỳ">
+            <Card
+              style={{
+                background: "#84A98C",
+                borderRadius: 12,
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              <Statistic
+                title={
+                  <span
+                    style={{
+                      color: "#fff",
+                      opacity: 0.9,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      fontSize: "15px",
+                    }}
+                  >
+                    VAT Tổng
+                    <InfoCircleOutlined style={{ color: "#1890ff", fontSize: 20 }} />
+                  </span>
+                }
+                value={reportData.summary.vatTotal}
+                prefix={<PercentageOutlined />}
+                valueStyle={{ color: "#fff", fontSize: 32, fontWeight: 700 }}
+                formatter={(value) => formatCurrency(Number(value))}
+              />
+            </Card>
+          </AntdTooltip>
         </Col>
+
+        {/* 4. TIỀN MẶT TRONG KÉT — giữ nguyên */}
         <Col xs={24} sm={12} lg={8}>
-          <Card
-            style={{
-              background: "linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)",
-              borderRadius: 12,
-              border: "none",
-            }}
-          >
-            <Statistic
-              title={<span style={{ color: "#fff", opacity: 0.9 }}>Tiền Mặt Trong Két</span>}
-              value={reportData.summary.cashInDrawer}
-              prefix={<WalletOutlined />}
-              valueStyle={{ color: "#fff", fontSize: 32, fontWeight: 700 }}
-              formatter={(value) => formatCurrency(Number(value))}
-            />
-          </Card>
+          <AntdTooltip title="Số tiền hiện có trong két của cửa hàng, hãy kiểm tra và đối chiếu với số liệu này">
+            <Card
+              style={{
+                background: "#3A4F50",
+                borderRadius: 12,
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              <Statistic
+                title={
+                  <span
+                    style={{
+                      color: "#fff",
+                      opacity: 0.9,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      fontSize: "15px",
+                    }}
+                  >
+                    Tiền Mặt Trong Két
+                    <InfoCircleOutlined style={{ color: "#1890ff", fontSize: 20 }} />
+                  </span>
+                }
+                value={reportData.summary.cashInDrawer}
+                prefix={<WalletOutlined />}
+                valueStyle={{ color: "#fff", fontSize: 32, fontWeight: 700 }}
+                formatter={(value) => formatCurrency(Number(value))}
+              />
+            </Card>
+          </AntdTooltip>
         </Col>
+
+        {/* 5. TỔNG ĐIỂM THƯỞNG */}
         <Col xs={24} sm={12} lg={8}>
-          <Card
-            style={{
-              background: "linear-gradient(135deg, #fa709a 0%, #fee140 100%)",
-              borderRadius: 12,
-              border: "none",
-            }}
-          >
-            <Statistic
-              title={<span style={{ color: "#fff", opacity: 0.9 }}>Điểm Thưởng Đã Cộng</span>}
-              value={reportData.summary.totalLoyaltyEarned}
-              prefix={<GiftOutlined />}
-              valueStyle={{ color: "#fff", fontSize: 32, fontWeight: 700 }}
-              suffix="điểm"
-            />
-          </Card>
+          <AntdTooltip title="Tổng điểm khách đã tích được khi mua hàng">
+            <Card
+              style={{
+                background: "#84A98C",
+                borderRadius: 12,
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              <Statistic
+                title={
+                  <span
+                    style={{
+                      color: "#fff",
+                      opacity: 0.9,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      fontSize: "15px",
+                    }}
+                  >
+                    Tổng điểm Thưởng Đã Cộng
+                    <InfoCircleOutlined style={{ color: "#1890ff", fontSize: 20 }} />
+                  </span>
+                }
+                value={reportData.summary.totalLoyaltyEarned}
+                prefix={<GiftOutlined />}
+                valueStyle={{ color: "#fff", fontSize: 32, fontWeight: 700 }}
+                suffix="điểm"
+              />
+            </Card>
+          </AntdTooltip>
         </Col>
+
+        {/* 6. TIỀN HOÀN HÀNG */}
         <Col xs={24} sm={12} lg={8}>
-          <Card
-            style={{
-              background: "linear-gradient(135deg, #ff6a00 0%, #ee0979 100%)",
-              borderRadius: 12,
-              border: "none",
-            }}
-          >
-            <Statistic
-              title={<span style={{ color: "#fff", opacity: 0.9 }}>Hoàn Hàng</span>}
-              value={reportData.summary.refundAmount}
-              prefix={<UndoOutlined />}
-              valueStyle={{ color: "#fff", fontSize: 28, fontWeight: 700 }}
-              formatter={(value) => formatCurrency(Number(value))}
-            />
-            <Text style={{ color: "#fff", opacity: 0.85, fontSize: 12 }}>({reportData.summary.totalRefunds} đơn)</Text>
-          </Card>
+          <AntdTooltip title="Tổng tiền đã hoàn cho khách (refund)">
+            <Card
+              style={{
+                background: "#3A4F50",
+                borderRadius: 12,
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              <Statistic
+                title={
+                  <span
+                    style={{
+                      color: "#fff",
+                      opacity: 0.9,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      fontSize: "15px",
+                    }}
+                  >
+                    Tổng tiền hoàn Hàng ({reportData.summary.totalRefunds} đơn)
+                    <InfoCircleOutlined style={{ color: "#1890ff", fontSize: 20 }} />
+                  </span>
+                }
+                value={reportData.summary.refundAmount}
+                prefix={<UndoOutlined />}
+                valueStyle={{ color: "#fff", fontSize: 32, fontWeight: 700 }}
+                formatter={(value) => formatCurrency(Number(value))}
+              />
+            </Card>
+          </AntdTooltip>
         </Col>
       </Row>
 
@@ -532,6 +653,9 @@ const EndOfDayReport: React.FC = () => {
               <span>
                 <UserOutlined style={{ marginRight: 8 }} />
                 Doanh Thu Theo Nhân Viên
+                <AntdTooltip title="Chỉ tính doanh thu đối với nhân viên bán hàng, không tính đối với chủ cửa hàng tự bán hàng">
+                  <InfoCircleOutlined style={{ marginLeft: 6, color: "#1890ff", cursor: "pointer" }} />
+                </AntdTooltip>
               </span>
             }
             style={{ borderRadius: 12 }}
@@ -580,9 +704,7 @@ const EndOfDayReport: React.FC = () => {
                   align: "right",
                   render: (value) => {
                     const roundedValue = Math.round(
-                      typeof value === "object" && value.$numberDecimal
-                        ? parseFloat(value.$numberDecimal)
-                        : Number(value)
+                      typeof value === "object" && value.$numberDecimal ? parseFloat(value.$numberDecimal) : Number(value)
                     );
                     return (
                       <Text strong style={{ color: "#1249c1ff" }}>
@@ -682,7 +804,14 @@ const EndOfDayReport: React.FC = () => {
           }
           style={{ marginTop: 16, borderRadius: 12, borderColor: "#ffccc7" }}
         >
-          <div style={{ background: "#fff1f0", padding: 16, borderRadius: 8, marginBottom: 16 }}>
+          <div
+            style={{
+              background: "#fff1f0",
+              padding: 16,
+              borderRadius: 8,
+              marginBottom: 16,
+            }}
+          >
             <Text strong style={{ fontSize: 16, color: "#ff4d4f" }}>
               {`Trong ${PERIOD_LABELS[periodType] || "khoảng thời gian này"} có ${
                 reportData.summary.totalRefunds

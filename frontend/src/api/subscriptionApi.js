@@ -1,4 +1,4 @@
-// api/subscriptionApi.js
+// frontend/src/api/subscriptionApi.js
 import apiClient from "./apiClient";
 
 const subscriptionApi = {
@@ -58,6 +58,10 @@ const subscriptionApi = {
    */
   getUsageStats: () => {
     return apiClient.get("/subscriptions/usage");
+  },
+
+  clearPendingPayment: () => {
+    return apiClient.post("/subscriptions/clear-pending");
   },
 };
 

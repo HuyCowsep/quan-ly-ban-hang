@@ -49,12 +49,18 @@ import InventoryReport from "./pages/report/InventoryReport";
 // Settings
 import Profile from "./pages/setting/Profile";
 import PricingPage from "./pages/setting/PricingPage";
+import DataExportPage from "./pages/setting/DataExportPage";
 import SubscriptionPage from "./pages/setting/SubscriptionPage";
 import ActivityLog from "./pages/setting/ActivityLog";
 import FileManager from "./pages/setting/FileManager";
 import Notification from "./pages/setting/Notification";
 import Term from "./pages/setting/Term";
 import Privacy from "./pages/setting/Privacy";
+import PaymentGatewaySettingsPage from "./pages/setting/PaymentGatewaySettingsPage";
+
+//Điều hướng thanh toán
+import SubscriptionSuccess from "./pages/SubscriptionSuccess";
+import SubscriptionCancel from "./pages/SubscriptionCancel";
 
 // Loyalty
 import LoyaltySetting from "./pages/loyalty/LoyaltySetting";
@@ -62,9 +68,9 @@ import LoyaltySetting from "./pages/loyalty/LoyaltySetting";
 // Orders
 import SidebarPOS from "./pages/order/SidebarPOS";
 import ListAllOrder from "./pages/order/ListAllOrder";
-import ListPendingOrders from "./pages/order/ListPendingOrders";
+import OrderReconciliationPage from "./pages/order/OrderReconciliationPage";
 
-/** Utility: Read user from localStorage */
+/** Utility: Đọc biến user từ localStorage */
 function getStoredUser() {
   try {
     const raw = localStorage.getItem("user");
@@ -76,7 +82,7 @@ function getStoredUser() {
   }
 }
 
-/** Utility: Check permissions */
+/** Utility: Kiểm tra quyền - permissions */
 function hasPermission(menu = [], required) {
   if (!required) return true;
   const reqs = Array.isArray(required) ? required : [required];
@@ -220,13 +226,14 @@ const PublicRoute = ({ children, allowWhenAuth = false }) => {
 function AppInit() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { logout } = useAuth();
 
   useEffect(() => {
     if (location.pathname === "/") {
-      localStorage.clear();
+      logout();
       navigate("/login", { replace: true });
     }
-  }, [location.pathname, navigate]);
+  }, [location.pathname]);
 
   return null;
 }
@@ -263,6 +270,9 @@ function App() {
       <SubscriptionExpiredOverlay />
 
       <Routes>
+        {/* ==================== Mặc định điều hướng nếu vào trang '/' ==================== */}
+        <Route path="/" element={<Navigate to="/login" replace />} />
+
         {/* ==================== Auth Routes ==================== */}
         <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
         <Route path="/register" element={<PublicRoute><RegisterPage /></PublicRoute>} />
@@ -271,13 +281,13 @@ function App() {
 
         {/* ==================== Dashboard & Store ==================== */}
         <Route path="/dashboard/:storeId" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
-        <Route path="/select-store" element={<ProtectedRoute><SelectStorePage /></ProtectedRoute>} />
+        <Route path="/select-store" element={<ProtectedRoute allowedPermissions="store:view"><SelectStorePage /></ProtectedRoute>} />
         <Route path="/update/store" element={<ProtectedRoute><InformationStore /></ProtectedRoute>} />
         <Route path="/stores/:storeId/employees" element={<ProtectedRoute><EmployeesPage /></ProtectedRoute>} />
 
         {/* ==================== Products & Suppliers ==================== */}
         <Route path="/suppliers" element={<ProtectedRoute allowedPermissions="supplier:view"><SupplierListPage /></ProtectedRoute>} />
-        <Route path="/products" element={<ProtectedRoute allowedPermissions="products:view"><ProductListPage /></ProtectedRoute>} />
+        <Route path="/products" element={<ProtectedRoute allowedPermissions="products:get"><ProductListPage /></ProtectedRoute>} />
         <Route path="/product-groups" element={<ProtectedRoute allowedPermissions="products:view"><ProductGroupsPage /></ProtectedRoute>} />
 
         {/* ==================== Customers ==================== */}
@@ -301,13 +311,19 @@ function App() {
         <Route path="/settings/file" element={<ProtectedRoute allowedPermissions="file:view"><FileManager /></ProtectedRoute>} />
         <Route path="/settings/subscription/pricing" element={<ProtectedRoute allowedPermissions="subscription:view"><PricingPage /></ProtectedRoute>} />
         <Route path="/settings/subscription" element={<ProtectedRoute allowedPermissions="subscription:view"><SubscriptionPage /></ProtectedRoute>} />
+        <Route path="/settings/export-data" element={<ProtectedRoute allowedRoles={["MANAGER"]}><DataExportPage /></ProtectedRoute>} />
         <Route path="/terms" element={<ProtectedRoute><Term /></ProtectedRoute>} />
         <Route path="/privacy" element={<ProtectedRoute><Privacy /></ProtectedRoute>} />
+        <Route path="/settings/payment-method" element={<ProtectedRoute allowedPermissions="settings:payment-method"><PaymentGatewaySettingsPage /></ProtectedRoute>} />
+
+        {/* ==================== Điều hướng thanh toán ==================== */}
+        <Route path="/subscription/success" element={<SubscriptionSuccess />} />
+        <Route path="/subscription/cancel" element={<SubscriptionCancel />} />
 
         {/* ==================== Orders ==================== */}
         <Route path="/orders/pos" element={<ProtectedRoute allowedPermissions="orders:create"><SidebarPOS /></ProtectedRoute>} />
         <Route path="/orders/list" element={<ProtectedRoute allowedPermissions="orders:view"><ListAllOrder /></ProtectedRoute>} />
-        <Route path="/orders/list-pending" element={<ProtectedRoute allowedPermissions="orders:view"><ListPendingOrders /></ProtectedRoute>} />
+        <Route path="/orders/reconciliation" element={<ProtectedRoute allowedRoles={["MANAGER"]}><OrderReconciliationPage /></ProtectedRoute>} />
 
         {/* ==================== Error Pages ==================== */}
         <Route path="/unauthorized" element={<Unauthorized />} />

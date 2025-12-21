@@ -1,5 +1,5 @@
 // src/context/AuthContext.jsx
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useState, useRef } from "react";
 import axios from "axios";
 import { useNavigate } from "react-router-dom";
 import { apiClient, userApi, subscriptionApi } from "../api";
@@ -19,7 +19,42 @@ export const AuthProvider = ({ children }) => {
         const s = localStorage.getItem("currentStore");
         return s ? JSON.parse(s) : null;
     });
-    const [managerSubscriptionExpired, setManagerSubscriptionExpired] = useState(false);
+
+    // ✅ Token Refresh Queue - Tránh multiple refresh cùng lúc
+    const isRefreshing = useRef(false);
+    const failedQueue = useRef([]);
+
+    const processQueue = (error, token = null) => {
+        failedQueue.current.forEach(prom => {
+            if (error) {
+                prom.reject(error);
+            } else {
+                prom.resolve(token);
+            }
+        });
+
+        failedQueue.current = [];
+    };
+
+    const managerSubscriptionKey = "managerSubscriptionExpired";
+    const [managerSubscriptionExpired, setManagerSubscriptionExpiredState] = useState(() => {
+        if (typeof window === "undefined") {
+            return false;
+        }
+        return localStorage.getItem(managerSubscriptionKey) === "true";
+    });
+
+    const updateManagerSubscriptionExpired = (expired) => {
+        setManagerSubscriptionExpiredState(expired);
+        if (typeof window === "undefined") {
+            return;
+        }
+        if (expired) {
+            localStorage.setItem(managerSubscriptionKey, "true");
+        } else {
+            localStorage.removeItem(managerSubscriptionKey);
+        }
+    };
 
     useEffect(() => {
         const initAuth = async () => {
@@ -27,17 +62,23 @@ export const AuthProvider = ({ children }) => {
             const storedUser = localStorage.getItem("user");
 
             if (storedToken && storedUser) {
-                setUser(JSON.parse(storedUser));
-                setToken(storedToken);
+                try {
+                    const parsedUser = JSON.parse(storedUser);
+                    setUser(parsedUser);
+                    setToken(storedToken);
+                } catch (e) {
+                    console.error("❌ Failed to parse stored user:", e);
+                    localStorage.removeItem("user");
+                    localStorage.removeItem("token");
+                }
             }
 
-            setLoading(false); // ✅ Chỉ khi init xong mới check quyền
+            setLoading(false);
         };
 
         initAuth();
     }, []);
 
-    // Persist auth state
     const persist = (u, t, store) => {
         if (u) localStorage.setItem("user", JSON.stringify(u));
         else localStorage.removeItem("user");
@@ -49,7 +90,57 @@ export const AuthProvider = ({ children }) => {
         else localStorage.removeItem("currentStore");
     };
 
-    // Set bearer header for axios & apiClient
+    const logout = async () => {
+        console.log("🚪 Logging out and clearing all data...");
+
+        // Clear state immediately
+        setUser(null);
+        setToken(null);
+        setCurrentStore(null);
+        updateManagerSubscriptionExpired(false);
+
+        // Reset refresh queue
+        isRefreshing.current = false;
+        failedQueue.current = [];
+
+        // Clear ALL localStorage keys related to auth
+        const keysToRemove = [
+            "user",
+            "token",
+            "currentStore",
+            managerSubscriptionKey,
+            "productVisibleColumns",
+        ];
+
+        keysToRemove.forEach(key => {
+            localStorage.removeItem(key);
+        });
+
+        // Clear keys with prefix
+        Object.keys(localStorage).forEach(storageKey => {
+            if (storageKey.startsWith("onboardingSteps_")) {
+                localStorage.removeItem(storageKey);
+            }
+        });
+
+        // Clear axios headers
+        delete axios.defaults.headers.common["Authorization"];
+        if (apiClient && apiClient.defaults) {
+            delete apiClient.defaults.headers.common["Authorization"];
+        }
+
+        // Optional: Call logout API
+        try {
+            await apiClient.post("/users/logout");
+            console.log("✅ Logout API called successfully");
+        } catch (e) {
+            console.warn("⚠️ Logout API failed (ignored):", e?.message || e);
+        }
+
+        // Navigate to login page
+        navigate("/login", { replace: true });
+    };
+
     useEffect(() => {
         const setAuthHeader = (t) => {
             if (t) {
@@ -66,30 +157,124 @@ export const AuthProvider = ({ children }) => {
         };
         setAuthHeader(token);
 
-        // Axios interceptor for automatic refresh token
+        // ✅ IMPROVED AXIOS INTERCEPTOR với Token Refresh Queue
         const interceptor = apiClient.interceptors.response.use(
             (response) => response,
             async (error) => {
                 const originalRequest = error.config;
+
+                // Skip if marked
+                if (originalRequest?.skipAuthRefresh) {
+                    return Promise.reject(error);
+                }
+
+                // Public endpoints
+                const isPublicAuthRequest = (() => {
+                    if (!originalRequest?.url) return false;
+                    const skipPaths = [
+                        "/users/login",
+                        "/users/register",
+                        "/users/verify-otp",
+                        "/users/forgot-password",
+                        "/users/forgot-password/send-otp",
+                        "/users/forgot-password/change",
+                        "/users/password/send-otp",
+                        "/users/password/change",
+                        "/users/refresh-token",
+                        "/users/resend-register-otp",
+                        "/users/logout",
+                    ];
+                    return skipPaths.some((path) => originalRequest.url.includes(path));
+                })();
+
+                // ✅ HANDLE 401 với Token Refresh Queue
                 if (
+                    !isPublicAuthRequest &&
                     error.response &&
                     error.response.status === 401 &&
                     !originalRequest._retry
                 ) {
+                    // Nếu đang refresh, đưa request vào queue
+                    if (isRefreshing.current) {
+                        return new Promise((resolve, reject) => {
+                            failedQueue.current.push({ resolve, reject });
+                        })
+                            .then(token => {
+                                originalRequest.headers['Authorization'] = `Bearer ${token}`;
+                                return apiClient(originalRequest);
+                            })
+                            .catch(err => {
+                                return Promise.reject(err);
+                            });
+                    }
+
                     originalRequest._retry = true;
+                    isRefreshing.current = true;
+
+                    console.warn("⚠️ 401 Unauthorized - Attempting token refresh...");
+
                     try {
+                        // Try to refresh token
                         const data = await userApi.refreshToken();
-                        setToken(data.token);
-                        persist(user, data.token, currentStore);
-                        // Update header and retry original request
-                        apiClient.defaults.headers.common["Authorization"] = `Bearer ${data.token}`;
-                        originalRequest.headers["Authorization"] = `Bearer ${data.token}`;
+
+                        console.log("✅ Token refreshed successfully");
+
+                        // Update token
+                        const newToken = data.token;
+                        setToken(newToken);
+                        persist(user, newToken, currentStore);
+
+                        // Update headers
+                        apiClient.defaults.headers.common["Authorization"] = `Bearer ${newToken}`;
+                        originalRequest.headers["Authorization"] = `Bearer ${newToken}`;
+
+                        // Process queued requests
+                        processQueue(null, newToken);
+
+                        // Retry original request
                         return apiClient(originalRequest);
-                    } catch (e) {
-                        console.error("Refresh token failed:", e);
-                        logout(); // nếu refresh không được thì logout
+                    } catch (refreshError) {
+                        console.error("❌ Token refresh failed:", refreshError);
+
+                        // Process queue with error
+                        processQueue(refreshError, null);
+
+                        // Auto logout
+                        console.log("🔒 Auto logout: Token refresh failed");
+                        await logout();
+
+                        return Promise.reject(refreshError);
+                    } finally {
+                        isRefreshing.current = false;
                     }
                 }
+
+                // ✅ HANDLE 403
+                if (
+                    !isPublicAuthRequest &&
+                    error.response &&
+                    error.response.status === 403
+                ) {
+                    const errorData = error.response.data || {};
+
+                    const isTokenError =
+                        errorData.message?.toLowerCase().includes("token") ||
+                        errorData.message?.toLowerCase().includes("unauthorized") ||
+                        errorData.message?.toLowerCase().includes("invalid token") ||
+                        errorData.message?.toLowerCase().includes("jwt") ||
+                        errorData.message?.toLowerCase().includes("expired") ||
+                        errorData.message?.toLowerCase().includes("authentication");
+
+                    if (isTokenError) {
+                        console.error("❌ 403 Forbidden - Invalid/Expired token");
+                        console.log("🔒 Auto logout: Token authentication error");
+                        await logout();
+                        return Promise.reject(error);
+                    }
+
+                    console.warn("⚠️ 403 Forbidden - Not token related:", errorData.message);
+                }
+
                 return Promise.reject(error);
             }
         );
@@ -100,155 +285,143 @@ export const AuthProvider = ({ children }) => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [token, user, currentStore]);
 
-    // 👉 FIX CẬP NHẬT: Giảm block từ ensureStore(), navigate sớm hơn cho MANAGER nếu chưa có store
-    // Thêm log để debug (xóa sau)
     const login = async (userData, tokenData) => {
         setLoading(true);
 
         try {
-            // Set immediate auth state
             setUser(userData);
             setToken(tokenData);
 
-            // Nếu user là STAFF và có currentStore, giữ lại store đó
-            // Các role khác sẽ phải chọn lại
             const initialStore = (userData?.role === "STAFF" && currentStore) ? currentStore : null;
             persist(userData, tokenData, initialStore);
 
-            // Try to prepare store info but do NOT block redirect for STAFF
             let resolvedStore = null;
-            let hasMultipleStores = false;
             try {
                 const res = await ensureStore();
                 resolvedStore =
                     res?.store || res?.currentStore || (res?.stores && res.stores[0]) || null;
-                hasMultipleStores = res?.stores && Array.isArray(res.stores) && res.stores.length > 1;
 
                 if (resolvedStore) {
                     setCurrentStore(resolvedStore);
-                    // Dù là role nào, nếu ensureStore() tìm thấy store,
-                    // ta sẽ cập nhật lại localStorage với store mới/chuẩn.
                     persist(userData, tokenData, resolvedStore);
                 }
             } catch (err) {
-                // Không crash app nếu ensureStore lỗi — chỉ log để debug
                 console.warn("ensureStore error in login (ignored):", err);
             }
 
-            // 👉 FIX: Chờ 1 tick để state update (React batch) trước khi navigate
-            await new Promise(resolve => setTimeout(resolve, 100)); // TĂNG LÊN 100ms để settle tốt hơn (test 0 nếu nhanh quá)
+            await new Promise(resolve => setTimeout(resolve, 100));
 
-            // Navigate based on role
-            // Yêu cầu: nếu là STAFF -> check subscription của Manager trước
+            // ✅ SỬA NAVIGATION CHO STAFF
             if (userData?.role === "STAFF") {
-                // Check subscription bằng cách gọi một API bất kỳ có middleware
                 try {
-                    // Gọi API để trigger middleware check
-                    const response = await fetch('/api/products?limit=1', {
-                        headers: {
-                            'Authorization': `Bearer ${responseToken}`
-                        }
+                    const response = await apiClient.get('/products', {
+                        params: { limit: 1 }
                     });
-                    
-                    if (response.status === 403) {
-                        const errorData = await response.json();
-                        
-                        // Check nếu là lỗi Manager expired - component sẽ hiện modal
+
+                    // ✅ FIX: STAFF cần navigate với storeId
+                    // Lấy storeId từ currentStore hoặc resolvedStore
+                    const staffStoreId = currentStore?._id || resolvedStore?._id;
+
+                    if (staffStoreId) {
+                        // Tuỳ thuộc vào route config của bạn, chọn 1 trong các cách:
+
+                        // Cách 1: Query parameter (recommended)
+                        navigate(`/dashboard?storeId=${staffStoreId}`);
+
+                        // Cách 2: Dynamic route
+                        // navigate(`/dashboard/${staffStoreId}`);
+
+                        // Cách 3: State
+                        // navigate("/dashboard", { state: { storeId: staffStoreId } });
+
+                        console.log(`✅ STAFF logged in, store: ${staffStoreId}`);
+                    } else {
+                        // Nếu không có storeId, chuyển đến select-store
+                        console.warn("No store found for STAFF, redirecting to select-store");
+                        navigate("/select-store");
+                    }
+
+                } catch (err) {
+                    if (err.response?.status === 403) {
+                        const errorData = err.response.data;
+
                         if (errorData.manager_expired || errorData.is_staff) {
-                            // Vẫn navigate để component được mount
-                            navigate("/dashboard");
+                            // Vẫn navigate với storeId nếu có
+                            const staffStoreId = currentStore?._id || resolvedStore?._id;
+                            if (staffStoreId) {
+                                navigate(`/dashboard/${staffStoreId}`);
+                            } else {
+                                navigate("/dashboard");
+                            }
                             return;
                         }
                     }
-                    
-                    navigate("/dashboard");
-                } catch (err) {
+
                     console.error('STAFF subscription check error:', err);
-                    navigate("/dashboard");
+
+                    // Fallback navigation với storeId
+                    const staffStoreId = currentStore?._id || resolvedStore?._id;
+                    if (staffStoreId) {
+                        navigate(`/dashboard/${staffStoreId}`);
+                    } else {
+                        navigate("/dashboard");
+                    }
                 }
                 return;
             }
 
-            // Manager và các role khác giữ hành vi cũ
             if (userData?.role === "MANAGER") {
-                // � CHECK SUBSCRIPTION TRƯỚC KHI REDIRECT
                 try {
                     const subResponse = await subscriptionApi.getCurrentSubscription();
                     const subData = subResponse.data || subResponse;
-                    
-                    const isExpired = 
-                        subData.status === "EXPIRED" || 
+
+                    const isExpired =
+                        subData.status === "EXPIRED" ||
                         (subData.status === "TRIAL" && subData.trial && !subData.trial.is_active);
-                    
+
                     if (isExpired) {
-                        setManagerSubscriptionExpired(true);
+                        updateManagerSubscriptionExpired(true);
                     } else {
-                        setManagerSubscriptionExpired(false);
+                        updateManagerSubscriptionExpired(false);
                     }
                 } catch (subErr) {
                     console.warn("Subscription check error in login (ignored):", subErr);
-                    // Nếu lỗi 403, coi như expired
                     if (subErr.response?.status === 403) {
-                        setManagerSubscriptionExpired(true);
+                        updateManagerSubscriptionExpired(true);
                     }
                 }
-                
-                // Manager LUÔN vào select-store để chọn cửa hàng
+
                 navigate("/select-store");
                 return;
             }
 
-            // Default for other roles
             navigate("/dashboard");
         } catch (error) {
-            console.error("Login failed:", error);
-            // Rollback nếu lỗi
+            console.error("❌ Login failed:", error);
             setUser(null);
             setToken(null);
             persist(null, null, null);
-            navigate("/login");
+            await logout();
         } finally {
-            // Tắt loading sau navigate
             setTimeout(() => {
                 setLoading(false);
-            }, 200); // 200ms để user thấy Spin tắt sau navigate
+            }, 200);
         }
-    };
-
-    const logout = async () => {
-        setUser(null);
-        setToken(null);
-        setCurrentStore(null);
-        localStorage.removeItem("user");
-        localStorage.removeItem("token");
-        localStorage.removeItem("currentStore");
-        delete axios.defaults.headers.common["Authorization"];
-        if (apiClient && apiClient.defaults) {
-            delete apiClient.defaults.headers.common["Authorization"];
-        }
-        // (nếu sau cần invalidate server, thêm lại sau)
-        // try {
-        //     await apiClient.post("/users/logout");
-        // } catch (e) {
-        //     console.warn("Logout API failed (ignored):", e?.message || e);
-        // }
-        navigate("/login");
     };
 
     return (
-        // Thêm set user để nó cập nhật thông tin mới nhất nếu có Save gì đó trong Profile.jsx
-        <AuthContext.Provider value={{ 
-            user, 
-            setUser, 
-            token, 
-            currentStore, 
-            setCurrentStore, 
-            login, 
-            logout, 
+        <AuthContext.Provider value={{
+            user,
+            setUser,
+            token,
+            currentStore,
+            setCurrentStore,
+            login,
+            logout,
             loading,
             managerSubscriptionExpired,
-            setManagerSubscriptionExpired
-        }}> 
+            setManagerSubscriptionExpired: updateManagerSubscriptionExpired
+        }}>
             {children}
         </AuthContext.Provider>
     );

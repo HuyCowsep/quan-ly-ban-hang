@@ -3,11 +3,13 @@ const express = require("express");
 const router = express.Router();
 const {
   verifyToken,
-  isManager,
+
   checkStoreAccess,
   requirePermission,
 } = require("../middlewares/authMiddleware");
-const { checkSubscriptionExpiry } = require("../middlewares/subscriptionMiddleware");
+const {
+  checkSubscriptionExpiry,
+} = require("../middlewares/subscriptionMiddleware");
 const { uploadProductImage } = require("../utils/cloudinary");
 const {
   createProduct,
@@ -99,7 +101,7 @@ router.get(
   - Lấy danh sách sản phẩm tồn thấp để cảnh báo
   - Hiện tại giới hạn cho Manager (isManager). Nếu muốn granular, thay bằng requirePermission("products:low-stock")
 */
-router.get("/low-stock", verifyToken, isManager, getLowStockProducts);
+router.get("/low-stock", verifyToken, getLowStockProducts);
 
 /*
   ROUTE: POST /api/products/store/:storeId/import
@@ -127,7 +129,7 @@ router.post(
   "/store/:storeId",
   verifyToken,
   checkSubscriptionExpiry,
-  checkStoreAccess,
+  // checkStoreAccess,
   uploadProductImage.single("image"),
   handleMulterError,
   requirePermission("products:create"),
@@ -143,8 +145,8 @@ router.get(
   "/store/:storeId",
   verifyToken,
   checkSubscriptionExpiry,
-  checkStoreAccess,
-  requirePermission("products:view"),
+  // checkStoreAccess,
+  requirePermission("products:get"),
   getProductsByStore
 );
 
@@ -158,7 +160,7 @@ router.put(
   "/:productId/price",
   verifyToken,
   checkSubscriptionExpiry,
-  checkStoreAccess,
+  // checkStoreAccess,
   requirePermission("products:price"),
   updateProductPrice
 );
@@ -172,7 +174,7 @@ router.put(
   "/:productId",
   verifyToken,
   checkSubscriptionExpiry,
-  checkStoreAccess,
+  // checkStoreAccess,
   uploadProductImage.single("image"),
   handleMulterError,
   requirePermission("products:update"),
@@ -188,7 +190,7 @@ router.delete(
   "/:productId/image",
   verifyToken,
   checkSubscriptionExpiry,
-  checkStoreAccess,
+  // checkStoreAccess,
   requirePermission("products:image:delete"),
   deleteProductImage
 );

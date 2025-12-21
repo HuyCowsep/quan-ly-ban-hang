@@ -4,7 +4,7 @@ const mongoose = require("mongoose");
 const orderSchema = new mongoose.Schema(
   {
     storeId: { type: mongoose.Schema.Types.ObjectId, ref: "Store", required: true }, // Cửa hàng
-    employeeId: { type: mongoose.Schema.Types.ObjectId, ref: "Employee", required: true }, // Nhân viên bán
+    employeeId: { type: mongoose.Schema.Types.ObjectId, ref: "Employee", default: null }, // Nhân viên bán
     customer: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", required: false, default: null }, // Khách hàng
     totalAmount: { type: mongoose.Schema.Types.Decimal128, required: true, min: 0 }, // Tổng tiền
     paymentMethod: { type: String, enum: ["cash", "qr"], required: true }, // Hình thức TT
@@ -22,6 +22,8 @@ const orderSchema = new mongoose.Schema(
     },
     vatAmount: { type: mongoose.Schema.Types.Decimal128, default: "0" }, // VAT thu (lưu sẵn, default 0)
     beforeTaxAmount: { type: mongoose.Schema.Types.Decimal128, default: "0" }, // Tiền trước thuế (lưu sẵn, default 0)
+    earnedPoints: { type: Number, default: 0, min: 0 }, // Số điểm tích lũy từ đơn hàng này (chỉ cộng khi in bill lần đầu)
+    usedPoints: { type: Number, default: 0, min: 0 }, // Số điểm khách đã dùng để giảm giá đơn này
   },
   {
     timestamps: true,

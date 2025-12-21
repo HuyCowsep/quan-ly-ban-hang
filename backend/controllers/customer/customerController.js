@@ -6,36 +6,38 @@ const Employee = require("../../models/Employee");
 const Store = require("../../models/Store");
 const logActivity = require("../../utils/logActivity");
 const path = require("path");
-const {
-  parseExcelToJSON,
-  validateRequiredFields,
-  sanitizeData,
-} = require("../../utils/fileImport");
+const { parseExcelToJSON, validateRequiredFields, sanitizeData } = require("../../utils/fileImport");
+const excelJS = require("exceljs");
+const fs = require("fs");
+
+function resolveStoreId(req) {
+  const candidate =
+    req.store?._id ||
+    req.store?.id ||
+    req.params?.storeId ||
+    req.query?.storeId ||
+    req.query?.shopId ||
+    req.body?.storeId ||
+    req.body?.shopId ||
+    req.user?.current_store ||
+    null;
+
+  return candidate ? candidate.toString() : null;
+}
 
 // POST /api/customers - Tạo mới khách hàng
 // Body: { name, phone, address?, note?, storeId? }
 const createCustomer = async (req, res) => {
   try {
     const { name, phone, address = "", note = "" } = req.body;
-    const storeFromReq =
-      req.store && (req.store._id || req.store.id)
-        ? req.store._id || req.store.id
-        : null;
+    const storeFromReq = req.store && (req.store._id || req.store.id) ? req.store._id || req.store.id : null;
     const storeFromBody = req.body.storeId || null;
-    const storeFromUser =
-      req.user && (req.user.currentStore || req.user.storeId)
-        ? req.user.currentStore || req.user.storeId
-        : null;
+    const storeFromUser = req.user && (req.user.currentStore || req.user.storeId) ? req.user.currentStore || req.user.storeId : null;
 
     const storeId = storeFromReq || storeFromBody || storeFromUser || null;
 
     // Debug log to help trace problems
-    console.log(
-      "createCustomer - req.user:",
-      req.user
-        ? { id: req.user._id || req.user.id, username: req.user.username }
-        : null
-    );
+    console.log("createCustomer - req.user:", req.user ? { id: req.user._id || req.user.id, username: req.user.username } : null);
 
     // Basic validation
     if (!name || !name.trim()) {
@@ -45,9 +47,7 @@ const createCustomer = async (req, res) => {
       return res.status(400).json({ message: "Thiếu số điện thoại" });
     }
     if (!storeId) {
-      return res
-        .status(400)
-        .json({ message: "Thiếu storeId (không xác định cửa hàng hiện hành)" });
+      return res.status(400).json({ message: "Thiếu storeId (không xác định cửa hàng hiện hành)" });
     }
 
     const trimmedPhone = phone.trim();
@@ -59,9 +59,7 @@ const createCustomer = async (req, res) => {
       isDeleted: { $ne: true },
     });
     if (existing) {
-      return res
-        .status(400)
-        .json({ message: "Số điện thoại đã tồn tại trong cửa hàng này" });
+      return res.status(400).json({ message: "Số điện thoại đã tồn tại trong cửa hàng này" });
     }
 
     // Tạo object mới, gắn storeId và creator nếu cần
@@ -90,12 +88,8 @@ const createCustomer = async (req, res) => {
 
     const created = await Customer.findById(newCustomer._id).lean();
 
-    console.log(
-      `Tạo mới khách hàng thành công: ${created.name} (${created.phone}), storeId=${storeId}`
-    );
-    return res
-      .status(201)
-      .json({ message: "Tạo khách hàng thành công", customer: created });
+    console.log(`Tạo mới khách hàng thành công: ${created.name} (${created.phone}), storeId=${storeId}`);
+    return res.status(201).json({ message: "Tạo khách hàng thành công", customer: created });
   } catch (err) {
     console.error("Lỗi khi tạo khách hàng:", err);
     return res.status(500).json({ message: "Lỗi server khi tạo khách hàng" });
@@ -111,10 +105,16 @@ const searchCustomers = async (req, res) => {
       return res.status(400).json({ message: "Thiếu query tìm kiếm" });
     }
 
+    const storeId = resolveStoreId(req);
+    if (!storeId) {
+      return res.status(400).json({ message: "Thiếu storeId để tìm khách hàng" });
+    }
+
     console.log(`Query search: "${query}", limit: ${limit}`); // Log query để debug
 
     // Search exact phone ($eq) + fuzzy name ($regex 'i'), filter isDeleted: { $ne: true } match missing field
     const searchQuery = {
+      storeId,
       isDeleted: { $ne: true }, // Ko true (bao gồm missing field default false)
     };
     if (query.length >= 10) {
@@ -136,11 +136,13 @@ const searchCustomers = async (req, res) => {
 
     // Log DB count để debug (tổng active customers)
     const totalActive = await Customer.countDocuments({
+      storeId,
       isDeleted: { $ne: true },
     }); // Ko true (missing ok)
     // Log raw document match phone exact để debug
     const rawPhoneMatch = await Customer.findOne({
       phone: query.trim(),
+      storeId,
       isDeleted: { $ne: true },
     }).lean();
     console.log(
@@ -175,9 +177,7 @@ const updateCustomer = async (req, res) => {
         isDeleted: { $ne: true },
       });
       if (existing) {
-        return res
-          .status(400)
-          .json({ message: "Số phone đã tồn tại trong cửa hàng này" });
+        return res.status(400).json({ message: "Số phone đã tồn tại trong cửa hàng này" });
       }
     }
 
@@ -214,10 +214,30 @@ const updateCustomer = async (req, res) => {
 const softDeleteCustomer = async (req, res) => {
   try {
     const { id } = req.params; // ID khách hàng từ params
+    const userId = req.user?.id || req.user?._id;
 
     const customer = await Customer.findById(id);
     if (!customer || customer.isDeleted) {
       return res.status(404).json({ message: "Khách hàng không tồn tại" });
+    }
+
+    // Verify user has access to this customer's store
+    const store = await Store.findById(customer.storeId).lean();
+    if (!store) {
+      return res.status(404).json({ message: "Cửa hàng không tồn tại" });
+    }
+
+    // Check permission based on role
+    if (req.user.role === "MANAGER") {
+      if (String(store.owner_id) !== String(userId)) {
+        return res.status(403).json({ message: "Bạn không có quyền xóa khách hàng ở cửa hàng này" });
+      }
+    } else if (req.user.role === "STAFF") {
+      const userData = await User.findById(userId).lean();
+      const roleMapping = (userData?.store_roles || []).find((r) => String(r.store) === String(store._id)) || null;
+      if (!roleMapping) {
+        return res.status(403).json({ message: "Bạn không có quyền xóa khách hàng ở cửa hàng này" });
+      }
     }
 
     // Check ko có Order pending/refunded (an toàn, ko xóa nếu có Order active)
@@ -226,9 +246,7 @@ const softDeleteCustomer = async (req, res) => {
       status: { $in: ["pending", "refunded"] },
     });
     if (activeOrders.length > 0) {
-      return res
-        .status(400)
-        .json({ message: "Không thể xóa khách hàng có đơn hàng đang xử lý" });
+      return res.status(400).json({ message: "Không thể xóa khách hàng có đơn hàng đang xử lý" });
     }
 
     customer.isDeleted = true; // Xóa mềm
@@ -254,11 +272,11 @@ const softDeleteCustomer = async (req, res) => {
 };
 
 // GET /api/customers/store/:storeId - Lấy toàn bộ khách hàng của 1 cửa hàng
-// GET /api/customers/store/:storeId?page=1&limit=10&query=abc
+// GET /api/customers/store/:storeId?page=1&limit=10&query=abc&deleted=false
 const getCustomersByStore = async (req, res) => {
   try {
     const { storeId } = req.params;
-    const { page = 1, limit = 10, query = "" } = req.query;
+    const { page = 1, limit = 10, query = "", deleted = "false" } = req.query;
 
     if (!storeId) {
       return res.status(400).json({ message: "Thiếu storeId trong URL" });
@@ -267,7 +285,7 @@ const getCustomersByStore = async (req, res) => {
     // Chuẩn bị bộ lọc
     const filter = {
       storeId,
-      isDeleted: { $ne: true },
+      isDeleted: deleted === "true" ? true : { $ne: true },
     };
 
     // Nếu có từ khóa tìm kiếm
@@ -301,9 +319,7 @@ const getCustomersByStore = async (req, res) => {
     });
   } catch (err) {
     console.error("❌ Lỗi khi lấy danh sách khách hàng theo store:", err);
-    res
-      .status(500)
-      .json({ message: "Lỗi server khi lấy danh sách khách hàng" });
+    res.status(500).json({ message: "Lỗi server khi lấy danh sách khách hàng" });
   }
 };
 
@@ -333,9 +349,7 @@ const importCustomers = async (req, res) => {
     const data = await parseExcelToJSON(req.file.buffer);
 
     if (data.length === 0) {
-      return res
-        .status(400)
-        .json({ message: "File không chứa dữ liệu hợp lệ" });
+      return res.status(400).json({ message: "File không chứa dữ liệu hợp lệ" });
     }
 
     const results = { success: [], failed: [], total: data.length };
@@ -345,10 +359,7 @@ const importCustomers = async (req, res) => {
       const rowNumber = i + 2;
 
       try {
-        const validation = validateRequiredFields(row, [
-          "Tên khách hàng",
-          "Số điện thoại",
-        ]);
+        const validation = validateRequiredFields(row, ["Tên khách hàng", "Số điện thoại"]);
         if (!validation.isValid) {
           results.failed.push({
             row: rowNumber,
@@ -433,17 +444,13 @@ const importCustomers = async (req, res) => {
 
 // Download Customer Template
 const downloadCustomerTemplate = (req, res) => {
-  const filePath = path.resolve(
-    __dirname,
-    "../../templates/customer_template.xlsx"
-  );
+  const filePath = path.resolve(__dirname, "../../templates/customer_template.xlsx");
 
   return res.sendFile(
     filePath,
     {
       headers: {
-        "Content-Type":
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": "attachment; filename=customer_template.xlsx",
       },
     },
@@ -475,9 +482,7 @@ const getCustomerById = async (req, res) => {
     res.json({ message: "Lấy thông tin khách hàng thành công", customer });
   } catch (err) {
     console.error("Lỗi lấy thông tin khách hàng:", err.message);
-    res
-      .status(500)
-      .json({ message: "Lỗi server khi lấy thông tin khách hàng" });
+    res.status(500).json({ message: "Lỗi server khi lấy thông tin khách hàng" });
   }
 };
 
@@ -499,11 +504,7 @@ const getAllCustomers = async (req, res) => {
     // Tìm kiếm theo query
     if (query && query.trim() !== "") {
       const q = query.trim();
-      filter.$or = [
-        { name: { $regex: q, $options: "i" } },
-        { phone: { $regex: q, $options: "i" } },
-        { address: { $regex: q, $options: "i" } },
-      ];
+      filter.$or = [{ name: { $regex: q, $options: "i" } }, { phone: { $regex: q, $options: "i" } }, { address: { $regex: q, $options: "i" } }];
     }
 
     // Tổng số kết quả
@@ -526,9 +527,117 @@ const getAllCustomers = async (req, res) => {
     });
   } catch (err) {
     console.error("Lỗi lấy danh sách khách hàng:", err.message);
-    res
-      .status(500)
-      .json({ message: "Lỗi server khi lấy danh sách khách hàng" });
+    res.status(500).json({ message: "Lỗi server khi lấy danh sách khách hàng" });
+  }
+};
+
+const exportCustomers = async (req, res) => {
+  try {
+    const { storeId } = req.params;
+
+    if (!storeId) {
+      return res.status(400).json({ message: "Thiếu storeId để xuất dữ liệu" });
+    }
+
+    // Lấy toàn bộ khách hàng của store, isDeleted=false
+    const customers = await Customer.find({ storeId, isDeleted: false }).sort({ createdAt: -1 }).lean();
+
+    if (!customers || customers.length === 0) {
+      return res.status(404).json({ message: "Không có dữ liệu khách hàng để xuất" });
+    }
+
+    // Tạo workbook
+    const workbook = new excelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Customers");
+
+    // Cột header
+    worksheet.columns = [
+      { header: "Tên khách hàng", key: "name", width: 30 },
+      { header: "Số điện thoại", key: "phone", width: 20 },
+      { header: "Địa chỉ", key: "address", width: 40 },
+      { header: "Ghi chú", key: "note", width: 40 },
+      { header: "Điểm tích lũy", key: "loyaltyPoints", width: 15 },
+      { header: "Tổng chi tiêu", key: "totalSpent", width: 20 },
+      { header: "Tổng số đơn", key: "totalOrders", width: 15 },
+      { header: "Ngày tạo", key: "createdAt", width: 20 },
+    ];
+
+    // Add rows
+    customers.forEach((customer) => {
+      worksheet.addRow({
+        name: customer.name,
+        phone: customer.phone,
+        address: customer.address || "",
+        note: customer.note || "",
+        loyaltyPoints: customer.loyaltyPoints || 0,
+        totalSpent: customer.totalSpent ? parseFloat(customer.totalSpent.toString()) : 0,
+        totalOrders: customer.totalOrders || 0,
+        createdAt: customer.createdAt ? customer.createdAt.toISOString().split("T")[0] : "",
+      });
+    });
+
+    // Set response headers
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename=customers_${storeId}_${Date.now()}.xlsx`);
+
+    await workbook.xlsx.write(res);
+    res.status(200).end();
+  } catch (error) {
+    console.error("Lỗi exportCustomers:", error);
+    res.status(500).json({ message: "Lỗi server khi xuất Excel", error: error.message });
+  }
+};
+
+// PUT /api/customers/:id/restore - Khôi phục khách hàng đã bị xóa
+const restoreCustomer = async (req, res) => {
+  try {
+    const { id } = req.params; // ID khách hàng từ params
+    const userId = req.user?.id || req.user?._id;
+
+    const customer = await Customer.findById(id);
+    if (!customer || !customer.isDeleted) {
+      return res.status(404).json({ message: "Khách hàng không tồn tại hoặc chưa bị xóa" });
+    }
+
+    // Verify user has access to this customer's store
+    const store = await Store.findById(customer.storeId).lean();
+    if (!store) {
+      return res.status(404).json({ message: "Cửa hàng không tồn tại" });
+    }
+
+    // Check permission based on role
+    if (req.user.role === "MANAGER") {
+      if (String(store.owner_id) !== String(userId)) {
+        return res.status(403).json({ message: "Bạn không có quyền khôi phục khách hàng ở cửa hàng này" });
+      }
+    } else if (req.user.role === "STAFF") {
+      const userData = await User.findById(userId).lean();
+      const roleMapping = (userData?.store_roles || []).find((r) => String(r.store) === String(store._id)) || null;
+      if (!roleMapping) {
+        return res.status(403).json({ message: "Bạn không có quyền khôi phục khách hàng ở cửa hàng này" });
+      }
+    }
+
+    customer.isDeleted = false; // Khôi phục khách hàng
+    await customer.save();
+    
+    // log nhật ký hoạt động
+    await logActivity({
+      user: req.user,
+      store: { _id: customer.storeId },
+      action: "restore",
+      entity: "Customer",
+      entityId: customer._id,
+      entityName: customer.name,
+      req,
+      description: `Khôi phục khách hàng ${customer.name} (${customer.phone})`,
+    });
+
+    console.log(`Khôi phục khách hàng thành công: ${customer.name}`);
+    res.json({ message: "Khôi phục khách hàng thành công", customer });
+  } catch (err) {
+    console.error("Lỗi khôi phục khách hàng:", err.message);
+    res.status(500).json({ message: "Lỗi server khi khôi phục khách hàng" });
   }
 };
 
@@ -542,4 +651,6 @@ module.exports = {
   downloadCustomerTemplate,
   getCustomerById,
   getAllCustomers,
+  exportCustomers,
+  restoreCustomer,
 };

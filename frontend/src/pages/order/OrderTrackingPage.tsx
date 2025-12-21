@@ -1,21 +1,6 @@
 // src/pages/order/OrderTrackingPage.tsx
 import React, { useState, useEffect, useCallback } from "react";
-import {
-  Card,
-  Row,
-  Col,
-  Input,
-  Table,
-  Tag,
-  Space,
-  DatePicker,
-  Select,
-  Typography,
-  Empty,
-  Spin,
-  Descriptions,
-  Divider,
-} from "antd";
+import { Card, Row, Col, Input, Table, Tag, Space, DatePicker, Select, Typography, Empty, Spin, Descriptions, Divider } from "antd";
 import {
   SearchOutlined,
   ShoppingOutlined,
@@ -37,7 +22,8 @@ const { RangePicker } = DatePicker;
 const { Option } = Select;
 const { Title, Text } = Typography;
 
-const API_BASE = "http://localhost:9999/api";
+const apiUrl = import.meta.env.VITE_API_URL;
+const API_BASE = `${apiUrl}`;
 
 // ==================== INTERFACES ====================
 
@@ -135,8 +121,7 @@ const OrderTrackingPage: React.FC = () => {
 
   // Helper: Format currency
   const formatCurrency = (value: MongoDecimal | number): string => {
-    const numValue =
-      typeof value === "object" && value.$numberDecimal ? parseFloat(value.$numberDecimal) : Number(value);
+    const numValue = typeof value === "object" && value.$numberDecimal ? parseFloat(value.$numberDecimal) : Number(value);
     return numValue.toLocaleString("vi-VN") + "₫";
   };
 
@@ -148,10 +133,26 @@ const OrderTrackingPage: React.FC = () => {
   // Helper: Get status config
   const getStatusConfig = (status: string) => {
     const configs: Record<string, { color: string; icon: React.ReactNode; text: string }> = {
-      pending: { color: "orange", icon: <ClockCircleOutlined />, text: "Chờ Thanh Toán" },
-      paid: { color: "green", icon: <CheckCircleOutlined />, text: "Đã Thanh Toán" },
-      refunded: { color: "red", icon: <RollbackOutlined />, text: "Hoàn Toàn Bộ" },
-      partially_refunded: { color: "volcano", icon: <RollbackOutlined />, text: "Hoàn 1 Phần" },
+      pending: {
+        color: "orange",
+        icon: <ClockCircleOutlined />,
+        text: "Chờ Thanh Toán",
+      },
+      paid: {
+        color: "green",
+        icon: <CheckCircleOutlined />,
+        text: "Đã Thanh Toán",
+      },
+      refunded: {
+        color: "red",
+        icon: <RollbackOutlined />,
+        text: "Hoàn Toàn Bộ",
+      },
+      partially_refunded: {
+        color: "volcano",
+        icon: <RollbackOutlined />,
+        text: "Hoàn 1 Phần",
+      },
     };
     return configs[status] || configs.pending;
   };
@@ -257,7 +258,10 @@ const OrderTrackingPage: React.FC = () => {
         <Title level={3} style={{ marginBottom: 24 }}>
           <ShoppingOutlined /> Tra Cứu Đơn Hàng
         </Title>
-        <span style={{ marginBottom: 24 }} className="px-4 py-2 text-base font-semibold bg-[#e6f4ff] text-[#1890ff] rounded-xl shadow-sm duration-200">
+        <span
+          style={{ marginBottom: 24 }}
+          className="px-4 py-2 text-base font-semibold bg-[#e6f4ff] text-[#1890ff] rounded-xl shadow-sm duration-200"
+        >
           {currentStore?.name}
         </span>
       </div>
@@ -296,7 +300,13 @@ const OrderTrackingPage: React.FC = () => {
                 style={{ width: "100%" }}
                 placeholder={["Từ ngày", "Đến ngày"]}
                 format="DD/MM/YYYY"
-                onChange={(dates) => setDateRange(dates as [Dayjs | null, Dayjs | null])}
+                onChange={(dates) => {
+                  if (!dates) {
+                    setDateRange([null, null]);
+                  } else {
+                    setDateRange(dates as [Dayjs | null, Dayjs | null]);
+                  }
+                }}
                 size="large"
               />
               <Select
@@ -332,7 +342,7 @@ const OrderTrackingPage: React.FC = () => {
                   title: "Mã Đơn",
                   dataIndex: "_id",
                   key: "_id",
-                  width: 120,
+                  width: 110,
                   render: (text) => (
                     <Text code copyable>
                       {text.slice(-8)}
@@ -355,6 +365,7 @@ const OrderTrackingPage: React.FC = () => {
                   title: "Tổng Tiền",
                   dataIndex: "totalAmount",
                   key: "totalAmount",
+                  width: 110,
                   align: "right",
                   render: (value) => <Text strong>{formatCurrency(value)}</Text>,
                 },
@@ -363,6 +374,7 @@ const OrderTrackingPage: React.FC = () => {
                   dataIndex: "status",
                   key: "status",
                   align: "center",
+                  width: 135,
                   render: (status) => {
                     const config = getStatusConfig(status);
                     return (
@@ -376,11 +388,9 @@ const OrderTrackingPage: React.FC = () => {
                   title: "Ngày Tạo",
                   dataIndex: "createdAt",
                   key: "createdAt",
-                  render: (date) => (
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      {formatDate(date)}
-                    </Text>
-                  ),
+                  align: "center",
+                  width: 100,
+                  render: (date) => <Text style={{ fontSize: 12, color: "#2274efff", fontWeight: "bold" }}>{formatDate(date)}</Text>,
                 },
               ]}
             />
@@ -411,10 +421,9 @@ const OrderTrackingPage: React.FC = () => {
                   type="inner"
                   title={
                     <Space>
-                      <Text strong>Thông Tin Đơn Hàng</Text>
-                      {getStatusConfig(orderDetail.order.status).icon}
+                      <Text strong>Thông Tin Đơn Hàng:</Text>
                       <Tag color={getStatusConfig(orderDetail.order.status).color}>
-                        {getStatusConfig(orderDetail.order.status).text}
+                        {getStatusConfig(orderDetail.order.status).text} {getStatusConfig(orderDetail.order.status).icon}
                       </Tag>
                     </Space>
                   }
@@ -430,7 +439,7 @@ const OrderTrackingPage: React.FC = () => {
                     <Descriptions.Item label="Nhân Viên">
                       <Space>
                         <UserOutlined />
-                        {orderDetail.order.employeeId.fullName}
+                        {orderDetail.order.employeeId?.fullName ? orderDetail.order.employeeId.fullName : <Tag color="gold">Chủ cửa hàng</Tag>}
                       </Space>
                     </Descriptions.Item>
                     <Descriptions.Item label="Khách Hàng">
@@ -449,9 +458,7 @@ const OrderTrackingPage: React.FC = () => {
                       </Tag>
                     </Descriptions.Item>
                     <Descriptions.Item label="Xuất VAT">
-                      <Tag color={orderDetail.order.isVATInvoice ? "cyan" : "default"}>
-                        {orderDetail.order.isVATInvoice ? "Có" : "Không"}
-                      </Tag>
+                      <Tag color={orderDetail.order.isVATInvoice ? "cyan" : "default"}>{orderDetail.order.isVATInvoice ? "Có" : "Không"}</Tag>
                     </Descriptions.Item>
                     <Descriptions.Item label="Ngày Tạo" span={2}>
                       <span style={{ marginRight: 10 }}>{formatDate(orderDetail.order.createdAt)}</span>
@@ -459,7 +466,7 @@ const OrderTrackingPage: React.FC = () => {
                     {orderDetail.order.printDate && (
                       <Descriptions.Item label="Ngày In Hoá Đơn" span={2}>
                         <span style={{ marginRight: 10 }}>{formatDate(orderDetail.order.printDate)}</span>
-                        <Tag color="blue"> Đã in {orderDetail.order.printCount} lần</Tag>
+                        <Tag color="blue"> Đã in hoá đơn: {orderDetail.order.printCount} lần</Tag>
                       </Descriptions.Item>
                     )}
                   </Descriptions>
@@ -527,9 +534,7 @@ const OrderTrackingPage: React.FC = () => {
                     </Descriptions.Item>
                     {orderDetail.order.isVATInvoice && (
                       <Descriptions.Item label="VAT (10%)">
-                        <Text style={{ fontSize: 16, color: "#faad14" }}>
-                          +{formatCurrency(orderDetail.order.vatAmount)}
-                        </Text>
+                        <Text style={{ fontSize: 16, color: "#faad14" }}>+{formatCurrency(orderDetail.order.vatAmount)}</Text>
                       </Descriptions.Item>
                     )}
                     <Descriptions.Item label="Tổng Tiền">
