@@ -1,6 +1,19 @@
-// src/components/product/ProductForm.jsx
-import React, { useState, useEffect } from "react";
-import { Form, Input, InputNumber, Select, Button, Space, Row, Col, Divider, Collapse, Upload, message, Card } from "antd";
+import React, { useState, useEffect, useMemo } from "react";
+import {
+  Form,
+  Input,
+  InputNumber,
+  Select,
+  Button,
+  Space,
+  Row,
+  Col,
+  Divider,
+  Collapse,
+  Upload,
+  message,
+  Card,
+} from "antd";
 import {
   SaveOutlined,
   CloseOutlined,
@@ -9,12 +22,12 @@ import {
   StockOutlined,
   AppstoreOutlined,
   CaretRightOutlined,
-  CheckCircleOutlined,
   InboxOutlined,
 } from "@ant-design/icons";
-import ImgCrop from "antd-img-crop"; // Optional: để crop ảnh trước khi upload
+import ImgCrop from "antd-img-crop";
 import { getSuppliers } from "../../api/supplierApi";
 import { getProductGroupsByStore } from "../../api/productGroupApi";
+import { getWarehouses } from "../../api/warehouseApi";
 import { createProduct, updateProduct } from "../../api/productApi";
 import Swal from "sweetalert2";
 
@@ -24,21 +37,38 @@ const { Panel } = Collapse;
 export default function ProductForm({ storeId, product = null, onSuccess, onCancel }) {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
+
   const [suppliers, setSuppliers] = useState([]);
   const [groups, setGroups] = useState([]);
+  const [warehouses, setWarehouses] = useState([]);
+
   const [fileList, setFileList] = useState([]);
 
-  // Load suppliers & groups
+  // Helper: chuẩn hoá id về string (hỗ trợ object populate hoặc string)
+  const toId = (v) => {
+    if (!v) return undefined;
+    if (typeof v === "string") return v;
+    if (typeof v === "object") return v._id?.toString?.() || v.id?.toString?.();
+    return undefined;
+  };
+
+  // Load suppliers & groups & warehouses
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [suppliersData, groupsData] = await Promise.all([getSuppliers(storeId), getProductGroupsByStore(storeId)]);
+        const [suppliersData, groupsData, warehousesData] = await Promise.all([
+          getSuppliers(storeId),
+          getProductGroupsByStore(storeId),
+          getWarehouses(storeId),
+        ]);
+
         setSuppliers(suppliersData?.suppliers || []);
         setGroups(groupsData?.productGroups || []);
+        setWarehouses(warehousesData?.warehouses || []);
       } catch (err) {
         Swal.fire({
           title: "❌ Lỗi!",
-          text: "không thể tải dữ liệu",
+          text: "Không thể tải dữ liệu",
           icon: "error",
           confirmButtonText: "OK",
           confirmButtonColor: "#ff4d4f",
@@ -46,76 +76,164 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
         });
       }
     };
-    fetchData();
+
+    if (storeId) fetchData();
   }, [storeId]);
+
+  // ✅ SUPPLIER OPTIONS
+  const supplierOptions = useMemo(() => {
+    const base = (suppliers || []).map((s) => ({ value: s._id, label: s.name }));
+    const currentId = toId(product?.supplier_id || product?.supplier || product?.supplierid);
+
+    if (product && currentId) {
+      const exists = base.some((o) => String(o.value) === String(currentId));
+      if (!exists) {
+        const label = product?.supplier_id?.name || product?.supplier?.name || "Nhà cung cấp hiện tại";
+        base.unshift({ value: currentId, label });
+      }
+    }
+    return base;
+  }, [suppliers, product]);
+
+  // ✅ GROUP OPTIONS
+  const groupOptions = useMemo(() => {
+    const base = (groups || []).map((g) => ({ value: g._id, label: g.name }));
+    const currentId = toId(product?.group_id || product?.group || product?.groupid);
+
+    if (product && currentId) {
+      const exists = base.some((o) => String(o.value) === String(currentId));
+      if (!exists) {
+        const label = product?.group_id?.name || product?.group?.name || "Nhóm sản phẩm hiện tại";
+        base.unshift({ value: currentId, label });
+      }
+    }
+    return base;
+  }, [groups, product]);
+
+  // ✅ WAREHOUSE OPTIONS - SỬA ĐÚNG FIELD
+  const warehouseOptions = useMemo(() => {
+    const base = (warehouses || []).map((w) => ({ value: w._id, label: w.name }));
+
+    // ✅ Đọc đúng field từ backend (ưu tiên schema + alias)
+    const currentId = toId(
+      product?.default_warehouse_id ||
+      product?.warehouse_id ||
+      product?.default_warehouse?._id ||
+      product?.warehouse?._id ||
+      product?.warehouseId
+    );
+
+    if (product && currentId) {
+      const exists = base.some((o) => String(o.value) === String(currentId));
+      if (!exists) {
+        const label =
+          product?.default_warehouse?.name ||
+          product?.default_warehouse_id?.name ||
+          product?.warehouse?.name ||
+          product?.default_warehouse_name ||
+          product?.warehouse_name ||
+          "Kho hiện tại";
+        base.unshift({ value: currentId, label });
+      }
+    }
+    return base;
+  }, [warehouses, product]);
 
   // Load product data if editing
   useEffect(() => {
     if (product) {
-      const defaultImage = product.image
+      const hasImageUrl = !!product?.image?.url;
+
+      const defaultImage = hasImageUrl
         ? [
-            {
-              uid: "-1",
-              name: product.image.public_id || "image",
-              status: "done",
-              url: product.image.url,
-            },
-          ]
+          {
+            uid: "-1",
+            name: product.image.publicid || product.image.public_id || "image",
+            status: "done",
+            url: product.image.url,
+          },
+        ]
         : [];
 
       setFileList(defaultImage);
 
+      // ✅ Lấy đúng id cho các select
+      const supplierValue = toId(product?.supplier_id || product?.supplier || product?.supplierid);
+      const groupValue = toId(product?.group_id || product?.group || product?.groupid);
+      const warehouseValue = toId(
+        product?.default_warehouse_id ||
+        product?.warehouse_id ||
+        product?.default_warehouse?._id ||
+        product?.warehouse?._id ||
+        product?.warehouseId
+      );
+
       form.setFieldsValue({
         name: product.name || "",
         sku: product.sku || "",
-        cost_price: product.cost_price || "",
-        price: product.price || "",
-        stock_quantity: product.stock_quantity || "",
-        min_stock: product.min_stock || "",
-        max_stock: product.max_stock || "",
-        unit: product.unit || "",
+        cost_price: product.cost_price ?? undefined,
+        price: product.price ?? undefined,
+        stock_quantity: product.stock_quantity ?? undefined,
+        min_stock: product.min_stock ?? undefined,
+        max_stock: product.max_stock ?? undefined,
+        unit: product.unit || undefined,
         status: product.status || "Đang kinh doanh",
-        supplier_id: product.supplier?._id || "",
-        group_id: product.group?._id || "",
-        image: defaultImage, // cái này quan trọng
+
+        // ✅ SỬA: dùng đúng field schema
+        supplier_id: supplierValue || undefined,
+        group_id: groupValue || undefined,
+        default_warehouse_id: warehouseValue || undefined, // ✅ ĐÚNG
+
+        image: defaultImage,
         description: product.description || "",
       });
     } else {
       form.resetFields();
       setFileList([]);
     }
-  }, [product]);
+  }, [product, form]);
 
   const handleSubmit = async (values) => {
     const formData = new FormData();
-    // Append tất cả các field (trừ image)
-    Object.keys(values).forEach((key) => {
-      if (key !== "image" && values[key] !== undefined && values[key] !== null) {
-        formData.append(key, values[key]);
-      }
+
+    // Append tất cả field (trừ image)
+    Object.keys(values || {}).forEach((key) => {
+      if (key === "image") return;
+
+      const v = values[key];
+      if (v === undefined || v === null) return;
+
+      formData.append(key, v);
     });
-    // Append file ảnh (nếu có)
-    if (values.image && values.image[0]?.originFileObj) {
-      formData.append("image", values.image[0].originFileObj);
+
+    // Append file ảnh (chỉ khi user chọn file mới)
+    const fileObj = values?.image?.[0]?.originFileObj;
+    if (fileObj instanceof File) {
+      formData.append("image", fileObj);
     }
-    // Nếu đang sửa sản phẩm và người dùng xóa ảnh → gửi flag để backend biết
-    if (product && values.image && values.image.length === 0) {
+
+    // Nếu đang sửa và người dùng xóa ảnh -> báo backend
+    if (product && Array.isArray(values?.image) && values.image.length === 0) {
       formData.append("removeImage", "true");
     }
+
     setLoading(true);
     try {
       if (product) {
-        await updateProduct(product._id, storeId, formData); // ← Gửi formData
+        await updateProduct(product._id, storeId, formData);
       } else {
-        await createProduct(storeId, formData); // ← Gửi formData
+        await createProduct(storeId, formData);
       }
+
       Swal.fire({
         title: "Thành công!",
-        text: product ? `Cập nhật sản phẩm "${product.name}" thành công!` : `Tạo sản phẩm "${values.name}" thành công!`,
+        text: product
+          ? `Cập nhật sản phẩm "${product.name}" thành công!`
+          : `Tạo sản phẩm "${values.name}" thành công!`,
         icon: "success",
         timer: 2000,
         timerProgressBar: true,
-        showConfirmButton: false,
+        showConfirmButton: true,
       });
 
       onSuccess?.();
@@ -132,19 +250,15 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
     }
   };
 
-  // Hàm này sẽ được gọi khi submit form
+  // Chuẩn antd Form + Upload: trả về fileList nguyên gốc
   const normFile = (e) => {
     if (Array.isArray(e)) return e;
-    return e?.fileList?.map((file) => ({
-      ...file,
-      originFileObj: file.originFileObj || file, // đảm bảo vẫn giữ file gốc
-    }));
+    return e?.fileList || [];
   };
 
   return (
     <>
       <Form form={form} layout="vertical" onFinish={handleSubmit} autoComplete="off" size="large">
-        {/* Required Fields Section */}
         <Card
           bordered={false}
           style={{
@@ -156,12 +270,13 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
           <div style={{ marginBottom: "20px" }}>
             <Space>
               <ShoppingOutlined style={{ color: "#1890ff", fontSize: "18px" }} />
-              <span style={{ fontWeight: 600, fontSize: "16px", color: "#262626" }}>Thông tin bắt buộc</span>
+              <span style={{ fontWeight: 600, fontSize: "16px", color: "#262626" }}>
+                Thông tin bắt buộc
+              </span>
             </Space>
           </div>
 
           <Row gutter={16}>
-            {/* Product Name */}
             <Col xs={24}>
               <Form.Item
                 name="name"
@@ -180,7 +295,6 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
               </Form.Item>
             </Col>
 
-            {/* Cost Price & Selling Price */}
             <Col xs={24} md={12}>
               <Form.Item
                 name="cost_price"
@@ -219,7 +333,6 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
               </Form.Item>
             </Col>
 
-            {/* Stock Quantity */}
             <Col xs={24} md={12}>
               <Form.Item
                 name="stock_quantity"
@@ -237,7 +350,26 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
               </Form.Item>
             </Col>
 
-            {/* Supplier */}
+            {/* ✅ KHO - SỬA NAME + FILL ĐÚNG */}
+            <Col xs={24} md={12}>
+              <Form.Item
+                name="default_warehouse_id"
+                label={<span style={{ fontWeight: 600 }}>Kho mặc định</span>}
+                rules={[{ required: true, message: "Vui lòng chọn kho!" }]}
+              >
+                <Select
+                  placeholder="-- Chọn kho mặc định --"
+                  style={{ borderRadius: "8px" }}
+                  showSearch
+                  optionFilterProp="label"
+                  filterOption={(input, option) =>
+                    (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+                  }
+                  options={warehouseOptions}
+                />
+              </Form.Item>
+            </Col>
+
             <Col xs={24} md={12}>
               <Form.Item
                 name="supplier_id"
@@ -248,22 +380,22 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
                   placeholder="-- Chọn nhà cung cấp --"
                   style={{ borderRadius: "8px" }}
                   showSearch
-                  optionFilterProp="children"
-                  filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
-                  options={suppliers.map((s) => ({
-                    value: s._id,
-                    label: s.name,
-                  }))}
+                  optionFilterProp="label"
+                  filterOption={(input, option) =>
+                    (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+                  }
+                  options={supplierOptions}
                 />
               </Form.Item>
             </Col>
           </Row>
         </Card>
 
-        {/* Optional Fields - Collapsible */}
         <Collapse
           bordered={false}
-          expandIcon={({ isActive }) => <CaretRightOutlined rotate={isActive ? 90 : 0} style={{ fontSize: "16px", color: "#1890ff" }} />}
+          expandIcon={({ isActive }) => (
+            <CaretRightOutlined rotate={isActive ? 90 : 0} style={{ fontSize: "16px", color: "#1890ff" }} />
+          )}
           style={{
             background: "#ffffff",
             borderRadius: "8px",
@@ -281,21 +413,18 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
             key="1"
           >
             <Row gutter={16}>
-              {/* SKU */}
               <Col xs={24} md={12}>
                 <Form.Item name="sku" label={<span style={{ fontWeight: 600 }}>SKU</span>}>
                   <Input placeholder="Mã SKU" style={{ borderRadius: "8px" }} />
                 </Form.Item>
               </Col>
 
-              {/* Unit */}
               <Col xs={24} md={12}>
                 <Form.Item name="unit" label={<span style={{ fontWeight: 600 }}>Đơn vị tính</span>}>
                   <Input placeholder="VD: cái, hộp, kg..." style={{ borderRadius: "8px" }} />
                 </Form.Item>
               </Col>
 
-              {/* Product Group */}
               <Col xs={24} md={12}>
                 <Form.Item
                   name="group_id"
@@ -306,19 +435,17 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
                     placeholder="-- Chọn nhóm sản phẩm --"
                     style={{ borderRadius: "8px" }}
                     showSearch
-                    optionFilterProp="children"
-                    filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
-                    options={groups.map((g) => ({
-                      value: g._id,
-                      label: g.name,
-                    }))}
+                    optionFilterProp="label"
+                    filterOption={(input, option) =>
+                      (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+                    }
+                    options={groupOptions}
                   />
                 </Form.Item>
               </Col>
 
-              {/* Status */}
               <Col xs={24} md={12}>
-                <Form.Item name="status" label={<span style={{ fontWeight: 600 }}>Trạng thái</span>} initialValue="Đang kinh doanh">
+                <Form.Item name="status" label={<span style={{ fontWeight: 600 }}>Trạng thái</span>}>
                   <Select
                     style={{ borderRadius: "8px" }}
                     options={[
@@ -329,7 +456,6 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
                 </Form.Item>
               </Col>
 
-              {/* Min Stock & Max Stock */}
               <Col xs={24} md={12}>
                 <Form.Item name="min_stock" label={<span style={{ fontWeight: 600 }}>Tồn tối thiểu</span>}>
                   <InputNumber placeholder="Số lượng tối thiểu" style={{ width: "100%", borderRadius: "8px" }} min={0} />
@@ -342,7 +468,6 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
                 </Form.Item>
               </Col>
 
-              {/* Image URL */}
               <Col xs={24}>
                 <Form.Item
                   label={<span style={{ fontWeight: 600 }}>Hình ảnh sản phẩm</span>}
@@ -373,13 +498,14 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
                       }}
                       onPreview={async (file) => {
                         let src = file.url;
-                        if (!src) {
+                        if (!src && file.originFileObj instanceof File) {
                           src = await new Promise((resolve) => {
                             const reader = new FileReader();
                             reader.readAsDataURL(file.originFileObj);
                             reader.onload = () => resolve(reader.result);
                           });
                         }
+                        if (!src) return;
                         const image = new Image();
                         image.src = src;
                         const imgWindow = window.open(src);
@@ -387,7 +513,6 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
                       }}
                       style={{ borderRadius: "8px" }}
                     >
-                      {/* Không dùng fileList từ state nữa */}
                       <div>
                         <InboxOutlined style={{ fontSize: 48, color: "#1890ff" }} />
                         <p className="ant-upload-text">Kéo & thả ảnh vào đây</p>
@@ -398,7 +523,6 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
                 </Form.Item>
               </Col>
 
-              {/* Description */}
               <Col xs={24}>
                 <Form.Item name="description" label={<span style={{ fontWeight: 600 }}>Mô tả</span>}>
                   <TextArea
@@ -416,7 +540,6 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
 
         <Divider style={{ margin: "20px 0" }} />
 
-        {/* Action Buttons */}
         <Form.Item style={{ marginBottom: 0 }}>
           <Space style={{ width: "100%", justifyContent: "flex-end" }} size="middle">
             <Button
@@ -424,10 +547,7 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
               icon={<CloseOutlined />}
               onClick={onCancel}
               disabled={loading}
-              style={{
-                borderRadius: "8px",
-                fontWeight: 500,
-              }}
+              style={{ borderRadius: "8px", fontWeight: 500 }}
             >
               Hủy
             </Button>
@@ -453,49 +573,26 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
         </Form.Item>
       </Form>
 
-      {/* Global Style - Apply to Modal Body */}
       <style jsx global>{`
-        /* Custom scrollbar cho Modal body */
-        .ant-modal-body {
-          /* Webkit browsers (Chrome, Safari, Edge) */
-        }
-
         .ant-modal-body::-webkit-scrollbar {
           width: 8px;
         }
-
         .ant-modal-body::-webkit-scrollbar-track {
           background: #f0f0f0;
           border-radius: 10px;
         }
-
         .ant-modal-body::-webkit-scrollbar-thumb {
           background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
           border-radius: 10px;
           transition: all 0.3s ease;
         }
-
         .ant-modal-body::-webkit-scrollbar-thumb:hover {
           background: linear-gradient(135deg, #5568d3 0%, #6a4190 100%);
         }
-
-        /* Firefox */
         .ant-modal-body {
           scrollbar-width: thin;
           scrollbar-color: #667eea #f0f0f0;
         }
-
-        /* Option: Hide scrollbar completely */
-        /*
-        .ant-modal-body::-webkit-scrollbar {
-          display: none;
-        }
-        
-        .ant-modal-body {
-          -ms-overflow-style: none;
-          scrollbar-width: none;
-        }
-        */
       `}</style>
     </>
   );

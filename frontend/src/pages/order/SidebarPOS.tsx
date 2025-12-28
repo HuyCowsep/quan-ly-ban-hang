@@ -17,7 +17,6 @@ import OrderRefund from "./OrderRefund";
 import OrderTrackingPage from "./OrderTrackingPage";
 import InventoryLookup from "./InventoryLookup";
 import EndOfDayReport from "./EndOfDayReport";
-import OrderPOSReconcileTab from "./OrderPOSReconcileTab";
 
 type PageType =
   | "pos"
@@ -66,11 +65,6 @@ const SidebarPOS: React.FC = () => {
       label: "Tra cứu đơn hàng",
     },
     {
-      key: "reconcile",
-      icon: <SafetyCertificateOutlined />,
-      label: "Đối soát hóa đơn",
-    },
-    {
       key: "endofdayreport",
       icon: <BarChartOutlined />,
       label: "Báo cáo cuối ngày",
@@ -88,8 +82,6 @@ const SidebarPOS: React.FC = () => {
         return <OrderTrackingPage />;
       case "inventory":
         return <InventoryLookup />;
-      case "reconcile":
-        return <OrderPOSReconcileTab />;
       case "endofdayreport":
         return <EndOfDayReport />;
       default:

@@ -15,18 +15,11 @@ const notFoundHandler = require("./middlewares/notFoundHandler");
 // Swagger
 const swaggerUi = require("swagger-ui-express");
 const YAML = require("yamljs");
-const swaggerDocument = YAML.load(path.join(__dirname, "swagger.yaml")); // 👈 nhớ tạo file swagger.yaml
+// const swaggerDocument = YAML.load(path.join(__dirname, "swagger.json")); // 👈 nhớ tạo file swagger.yaml
 // --- LOAD MODELS ---
-[
-  "Product",
-  "ProductGroup",
-  "Supplier",
-  "Employee",
-  "StockDisposal",
-  "StockCheck",
-  "PurchaseOrder",
-  "PurchaseReturn",
-].forEach((model) => require(`./models/${model}`));
+["Product", "ProductGroup", "Supplier", "Employee", "StockDisposal", "StockCheck", "PurchaseOrder", "PurchaseReturn"].forEach((model) =>
+  require(`./models/${model}`)
+);
 
 const app = express();
 
@@ -42,16 +35,8 @@ const allowedOrigins = [
 // --- ĐẶT WEBOOK trước các body parser ---
 const orderWebhookHandler = require("./routers/orderWebhookHandler");
 const subscriptionWebhookHandler = require("./routers/subscriptionWebhookHandler");
-app.post(
-  "/api/orders/vietqr-webhook",
-  express.raw({ type: "*/*" }),
-  orderWebhookHandler
-);
-app.post(
-  "/api/subscriptions/webhook",
-  express.raw({ type: "*/*" }),
-  subscriptionWebhookHandler
-);
+app.post("/api/orders/vietqr-webhook", express.raw({ type: "*/*" }), orderWebhookHandler);
+app.post("/api/subscriptions/webhook", express.raw({ type: "*/*" }), subscriptionWebhookHandler);
 
 // PHẦN CODE CỦA Multer
 const uploadDir = path.join(__dirname, "uploads");
@@ -71,23 +56,13 @@ const io = new Server(server, {
     origin: allowedOrigins,
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "Cache-Control",
-      "Pragma",
-      "X-XSRF-TOKEN",
-      "XSRF-TOKEN",
-      "x-store-id",
-    ],
+    allowedHeaders: ["Content-Type", "Authorization", "Cache-Control", "Pragma", "X-XSRF-TOKEN", "XSRF-TOKEN", "x-store-id"],
   },
 });
 app.set("io", io);
 io.on("connection", (socket) => {
   console.log(`🟢 Client kết nối: ${socket.id}`);
-  socket.on("disconnect", () =>
-    console.log(`🔴 Client ngắt kết nối: ${socket.id}`)
-  );
+  socket.on("disconnect", () => console.log(`🔴 Client ngắt kết nối: ${socket.id}`));
 });
 
 //PHẦN KHAI BÁO THÔNG BÁO BẰNG EMAIL CRONJOB
@@ -99,14 +74,7 @@ app.use(
     origin: allowedOrigins,
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "Cache-Control",
-      "Pragma",
-      "X-XSRF-TOKEN",
-      "XSRF-TOKEN",
-    ],
+    allowedHeaders: ["Content-Type", "Authorization", "Cache-Control", "Pragma", "X-XSRF-TOKEN", "XSRF-TOKEN"],
   })
 );
 
@@ -116,28 +84,31 @@ app.use(cookieParser());
 app.use(morgan("dev"));
 
 // --- FULL CÁC ROUTERS ---
-const storeRouters = require("./routers/storeRouters");
-const storePaymentRouters = require("./routers/storePaymentRouters");
-const userRouters = require("./routers/userRouters");
-const productRouters = require("./routers/productRouters");
-const productGroupRouters = require("./routers/productGroupRouters");
+const storeRouters = require("./routers/storeRouters"); //api Store
+const storePaymentRouters = require("./routers/storePaymentRouters"); //api lịch sử thanh toán gói dịch vụ
+const userRouters = require("./routers/userRouters"); //api các tài khoản
+const productRouters = require("./routers/productRouters"); //api sản phẩm
+const productGroupRouters = require("./routers/productGroupRouters"); //api nhóm sản phẩm
 const stockDisposalRouters = require("./routers/stockDisposalRouters");
 const stockCheckRouters = require("./routers/stockCheckRouters");
-const supplierRouters = require("./routers/supplierRouters");
+const supplierRouters = require("./routers/supplierRouters"); //api nhà cung cấp
 const purchaseOrderRouters = require("./routers/purchaseOrderRouters");
 const purchaseReturnRouters = require("./routers/purchaseReturnRouters");
-const orderRouters = require("./routers/orderRouters");
-const taxRouters = require("./routers/taxRouters");
-const revenueRouters = require("./routers/revenueRouters");
-const customerRouters = require("./routers/customerRouters");
-const loyaltyRouters = require("./routers/loyaltyRouters");
-const financialRouters = require("./routers/financialRouters");
-const activityLogRouters = require("./routers/activityLogRouters");
-const fileRouters = require("./routers/fileRouters");
-const subscriptionRouters = require("./routers/subscriptionRouters");
-const notificationRouters = require("./routers/notificationRouters");
-const inventoryReportRouters = require("./routers/inventoryReportRouters");
-const exportRouters = require("./routers/exportRouters");
+const orderRouters = require("./routers/orderRouters"); //api đơn hàng
+const taxRouters = require("./routers/taxRouters"); //api kê khai thuế
+const revenueRouters = require("./routers/revenueRouters"); //api báo cáo doanh thu
+const customerRouters = require("./routers/customerRouters"); // api khách hàng
+const loyaltyRouters = require("./routers/loyaltyRouters"); //api hệ thống tích điểm
+const financialRouters = require("./routers/financialRouters"); //api báo cáo tài chính tổng quan
+const activityLogRouters = require("./routers/activityLogRouters"); // api nhật ký hoạt động
+const fileRouters = require("./routers/fileRouters"); //api quản lý file
+const subscriptionRouters = require("./routers/subscriptionRouters"); //api mua gói dịch vụ
+const notificationRouters = require("./routers/notificationRouters"); //api list thông báo real-time
+const inventoryReportRouters = require("./routers/inventoryReportRouters"); //api báo cáo tồn kho
+
+const exportRouters = require("./routers/exportRouters"); //api xuất các báo cáo
+const warehouseRouters = require("./routers/warehouseRouters"); //api quản lý kho
+const inventoryVoucherRouters = require("./routers/inventoryVoucherRouters"); // api phiếu giảm giá kho????
 
 // --- FULL CÁC API ĐÃ MOUNT ROUTERS ---
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -163,12 +134,12 @@ app.use("/api/subscriptions", subscriptionRouters);
 app.use("/api/notifications", notificationRouters);
 app.use("/api/inventory-reports", inventoryReportRouters);
 app.use("/api/export", exportRouters);
+app.use("/api/stores", inventoryVoucherRouters);
+app.use("/api/stores", warehouseRouters);
 
 // --- PHẦN ROOT MẶC ĐỊNH CỦA BACKEND ---
 app.get("/", (req, res) => {
-  res.send(
-    "👀 Ai vừa ping tui đó? Tui thấy rồi nha! From SmartRetail team with Love 🫶"
-  );
+  res.send("👀 Ai vừa ping tui đó? Tui thấy rồi nha! From SmartRetail team with Love 🫶");
 });
 
 // --- API TỔNG QUAN (JSON) ---
@@ -194,7 +165,7 @@ app.get("/api", (req, res) => {
 });
 
 // --- PHẦN CỦA SWAGGER UI ---
-app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+// app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 // --- PHẦN BÁO LỖI CỦA ERROR HANDLERS ---
 app.use(notFoundHandler);

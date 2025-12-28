@@ -34,6 +34,8 @@ import InformationStore from "./pages/store/InformationStore";
 import ProductListPage from "./pages/product/ProductListPage";
 import ProductGroupsPage from "./pages/productGroup/ProductGroupsPage";
 import SupplierListPage from "./pages/supplier/SupplierListPage";
+import InventoryVoucherPage from "./pages/inventory/InventoryVoucherPage";
+import WarehousePage from "./pages/warehouse/WarehousePage";
 
 // Customer
 import CustomerListPage from "./pages/customer/CustomerListPage";
@@ -42,7 +44,6 @@ import TopCustomer from "./pages/customer/TopCustomer";
 // Reports
 import ReportDashboard from "./pages/report/ReportDashboard";
 import RevenueReport from "./pages/report/RevenueReport";
-import TaxDeclaration from "./pages/report/TaxDeclaration";
 import TopProductsReport from "./pages/report/TopProductsReport";
 import InventoryReport from "./pages/report/InventoryReport";
 
@@ -68,7 +69,6 @@ import LoyaltySetting from "./pages/loyalty/LoyaltySetting";
 // Orders
 import SidebarPOS from "./pages/order/SidebarPOS";
 import ListAllOrder from "./pages/order/ListAllOrder";
-import OrderReconciliationPage from "./pages/order/OrderReconciliationPage";
 
 /** Utility: Đọc biến user từ localStorage */
 function getStoredUser() {
@@ -289,6 +289,8 @@ function App() {
         <Route path="/suppliers" element={<ProtectedRoute allowedPermissions="supplier:view"><SupplierListPage /></ProtectedRoute>} />
         <Route path="/products" element={<ProtectedRoute allowedPermissions="products:get"><ProductListPage /></ProtectedRoute>} />
         <Route path="/product-groups" element={<ProtectedRoute allowedPermissions="products:view"><ProductGroupsPage /></ProtectedRoute>} />
+        <Route path="/inventory-vouchers" element={<ProtectedRoute allowedPermissions="inventory:voucher:view"><InventoryVoucherPage /></ProtectedRoute>} />
+        <Route path="/warehouses" element={<ProtectedRoute allowedPermissions="warehouses:view"><WarehousePage /></ProtectedRoute>} />
 
         {/* ==================== Customers ==================== */}
         <Route path="/customers-list" element={<ProtectedRoute allowedPermissions="customers:search"><CustomerListPage /></ProtectedRoute>} />
@@ -300,7 +302,6 @@ function App() {
         {/* ==================== Reports ==================== */}
         <Route path="/reports/dashboard" element={<ProtectedRoute allowedPermissions="reports:financial:view"><ReportDashboard /></ProtectedRoute>} />
         <Route path="/reports/revenue" element={<ProtectedRoute allowedPermissions="reports:revenue:view"><RevenueReport /></ProtectedRoute>} />
-        <Route path="/reports/tax" element={<ProtectedRoute allowedPermissions="tax:preview"><TaxDeclaration /></ProtectedRoute>} />
         <Route path="/reports/top-products" element={<ProtectedRoute allowedPermissions="reports:top-products"><TopProductsReport /></ProtectedRoute>} />
         <Route path="/reports/inventory-reports" element={<ProtectedRoute allowedPermissions="inventory:stock-check:view"><InventoryReport /></ProtectedRoute>} />
 
@@ -323,7 +324,6 @@ function App() {
         {/* ==================== Orders ==================== */}
         <Route path="/orders/pos" element={<ProtectedRoute allowedPermissions="orders:create"><SidebarPOS /></ProtectedRoute>} />
         <Route path="/orders/list" element={<ProtectedRoute allowedPermissions="orders:view"><ListAllOrder /></ProtectedRoute>} />
-        <Route path="/orders/reconciliation" element={<ProtectedRoute allowedRoles={["MANAGER"]}><OrderReconciliationPage /></ProtectedRoute>} />
 
         {/* ==================== Error Pages ==================== */}
         <Route path="/unauthorized" element={<Unauthorized />} />

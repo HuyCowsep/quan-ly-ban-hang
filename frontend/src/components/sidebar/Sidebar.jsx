@@ -114,6 +114,12 @@ export default function Sidebar({ onCollapsedChange }) {
         label: "Quản lý kho",
         icon: <AppstoreOutlined style={{ fontSize: 18 }} />,
         children: [
+          { key: "/warehouses", label: <span style={{ fontSize: 13.5 }}>Kho hàng</span>, permission: "warehouses:view" },
+          {
+            key: "/inventory-vouchers",
+            label: <span style={{ fontSize: 13.5 }}>Phiếu nhập/xuất kho</span>,
+            permission: "inventory:voucher:view",
+          },
           {
             key: "/products",
             label: <span style={{ fontSize: 13.5 }}>Danh sách hàng hóa</span>,
@@ -146,11 +152,6 @@ export default function Sidebar({ onCollapsedChange }) {
             label: <span style={{ fontSize: 13.5 }}> Danh sách đơn hàng</span>,
             permission: "orders:view",
           },
-          {
-            key: "/orders/reconciliation",
-            label: <span style={{ fontSize: 13.5 }}>Đối soát hóa đơn</span>,
-            permission: "orders:view",
-          },
         ],
       },
       {
@@ -180,11 +181,6 @@ export default function Sidebar({ onCollapsedChange }) {
             label: <span style={{ fontSize: 13.5 }}>Danh sách nhân viên</span>,
             permission: "employees:view",
           },
-          // {
-          //   key: `/stores/${storeId}/employees/schedule`,
-          //   label: <span style={{ fontSize: 13.5 }}>Lịch làm việc</span>,
-          //   permission: "employees:assign",
-          // },
         ],
       },
       {
@@ -218,11 +214,6 @@ export default function Sidebar({ onCollapsedChange }) {
             key: "/reports/inventory-reports",
             label: <span style={{ fontSize: 13.5 }}>Báo cáo tồn kho</span>,
             permission: "inventory:stock-check:view",
-          },
-          {
-            key: "/reports/tax",
-            label: <span style={{ fontSize: 13.5 }}>Kê khai thuế</span>,
-            permission: "tax:preview",
           },
           {
             key: "/reports/top-products",
