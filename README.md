@@ -1,4 +1,3 @@
-<!-- 
 # smallbiz-sales – Smart Retail Management System
 
 Hệ thống quản lý bán lẻ & phân tích tài chính toàn diện
@@ -192,5 +191,3 @@ Hệ thống hiện tại sử dụng **3 file môi trường chính**:
 - Mobile App hiện tại giống y hệt web, tức web có gì mobile có đó, tester vẫn đang test vài lần
 - Chưa hỗ trợ multi-store nâng cao chuyên sâu (chuỗi lớn), chỉ hỗ trợ quản lý nhiều cửa hàng trong 1 account nhưng cũng được tách biệt riêng về các chức năng và logic theo Id Store
 👉 Tuy nhiên, kiến trúc hệ thống cho phép mở rộng các tính năng này trong tương lai...
-
--->
