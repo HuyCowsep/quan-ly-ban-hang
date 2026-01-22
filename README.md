@@ -133,11 +133,6 @@ Nguyễn Đức Huy và 2 thành viên (backend, frontend) khác: Lê Chí Mạn
 📌 Lời kết
 Dự án này không chỉ là một bài tập học thuật, mà là một sản phẩm được thiết kế dựa trên nghiệp vụ thực tế, có thể mở rộng và triển khai trong môi trường kinh doanh thật. “Xây một hệ thống mà người dùng không cần hiểu code vẫn dùng được – đó mới là thành công. Lời nói này là chatGPT nói!!! ^_^”. Hệ thống vẫn có nhiều điểm chưa thật sự hoàn hảo, vẫn cần update liên tục
 
-📌 Contact riêng
-- huyndhe176876@fpt.edu.vn
-- ccoolls147@gmail.com
-- 0912 202 885
-
 📌 ENV & Cấu hình hệ thống
 Hệ thống sử dụng các file `.env` để cấu hình môi trường và bảo mật thông tin nhạy cảm.
 
@@ -191,3 +186,8 @@ Hệ thống hiện tại sử dụng **3 file môi trường chính**:
 - Mobile App hiện tại giống y hệt web, tức web có gì mobile có đó, tester vẫn đang test vài lần
 - Chưa hỗ trợ multi-store nâng cao chuyên sâu (chuỗi lớn), chỉ hỗ trợ quản lý nhiều cửa hàng trong 1 account nhưng cũng được tách biệt riêng về các chức năng và logic theo Id Store
 👉 Tuy nhiên, kiến trúc hệ thống cho phép mở rộng các tính năng này trong tương lai...
+
+📌 Contact riêng
+- huyndhe176876@fpt.edu.vn
+- ccoolls147@gmail.com
+- 0912 202 885
