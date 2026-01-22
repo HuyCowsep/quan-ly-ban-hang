@@ -18,6 +18,12 @@ const productSchema = new mongoose.Schema(
       default: "Đang kinh doanh",
     },
 
+    // ===== Thông tin pháp lý & Hóa đơn (Thông tư 88/40/78) =====
+    tax_rate: { type: Number, default: 0 }, // % Thuế GTGT (0, 5, 8, 10). -1: Không chịu thuế
+    origin: { type: String, maxlength: 100, trim: true, default: "" }, // Xuất xứ (Việt Nam, TQ...)
+    brand: { type: String, maxlength: 100, trim: true, default: "" }, // Thương hiệu
+    warranty_period: { type: String, maxlength: 100, default: "" }, // Thời gian bảo hành (12 tháng)
+
     // ===== Cửa hàng & kho =====
     store_id: { type: mongoose.Schema.Types.ObjectId, ref: "Store", required: true },
 
@@ -38,7 +44,22 @@ const productSchema = new mongoose.Schema(
       url: { type: String, default: null },
       public_id: { type: String, default: null },
     },
+
+    // ===== Quản lý Lô & Hạn sử dụng =====
+    batches: [
+      {
+        batch_no: { type: String, trim: true },
+        expiry_date: { type: Date, default: null },
+        cost_price: { type: Number, default: 0 }, // Giá vốn của lô này
+        selling_price: { type: Number, default: 0 }, // Giá bán của lô này
+        quantity: { type: Number, default: 0 },   // Số lượng tồn của lô này (ban đầu = nhập, sau này trừ dần nếu implement FIFO)
+        warehouse_id: { type: mongoose.Schema.Types.ObjectId, ref: "Warehouse" }, // Lô này ở kho nào
+        created_at: { type: Date, default: Date.now }
+      }
+    ],
+
     lowStockAlerted: { type: Boolean, default: false },
+    expiryAlerted: { type: Boolean, default: false },
     isDeleted: { type: Boolean, default: false },
   },
   {
@@ -67,8 +88,8 @@ productSchema.pre(/^find/, function (next) {
   next();
 });
 
-// Index compound để đảm bảo SKU unique trong phạm vi cửa hàng
-productSchema.index({ store_id: 1, sku: 1 }, { unique: true, name: "store_sku_unique" });
+// Cho phép trùng SKU trong phạm vi cửa hàng theo yêu cầu người dùng (Bỏ unique: true)
+productSchema.index({ store_id: 1, sku: 1 }, { name: "store_sku_normal" });
 // Query sản phẩm theo store + soft delete
 productSchema.index({ store_id: 1, isDeleted: 1 });
 // Lọc theo nhóm sản phẩm trong store

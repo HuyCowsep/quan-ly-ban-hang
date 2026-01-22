@@ -90,10 +90,10 @@ const LoyaltyConfigScreen: React.FC = () => {
       setVndPerPoint(apiConfig.vndPerPoint.toString());
       setMinOrderValue(apiConfig.minOrderValue.toString());
 
-      console.log("✅ Lấy config tích điểm thành công:", apiConfig);
+      console.log(" Lấy config tích điểm thành công:", apiConfig);
     } catch (err) {
       const axiosError = err as any;
-      console.error("❌ Lỗi lấy config:", axiosError);
+      console.error(" Lỗi lấy config:", axiosError);
 
       if (axiosError.response?.status === 404) {
         // 404: Chưa setup
@@ -133,7 +133,7 @@ const LoyaltyConfigScreen: React.FC = () => {
       );
 
       console.log(
-        "✅ Toggle isActive thành công:",
+        " Toggle isActive thành công:",
         response.data.config.isActive
       );
 
@@ -150,7 +150,7 @@ const LoyaltyConfigScreen: React.FC = () => {
       );
     } catch (err) {
       const axiosError = err as any;
-      console.error("❌ Lỗi toggle:", axiosError);
+      console.error(" Lỗi toggle:", axiosError);
       setIsActive(!value); // Revert
 
       const errorMessage =
@@ -207,7 +207,7 @@ const LoyaltyConfigScreen: React.FC = () => {
         payload
       );
 
-      console.log("✅ Lưu config thành công:", response.data.config);
+      console.log(" Lưu config thành công:", response.data.config);
 
       Alert.alert("Thành công", "Cấu hình đã được lưu thành công!", [
         { text: "OK" },
@@ -220,7 +220,7 @@ const LoyaltyConfigScreen: React.FC = () => {
       }
     } catch (err) {
       const axiosError = err as any;
-      console.error("❌ Lỗi lưu config:", axiosError);
+      console.error(" Lỗi lưu config:", axiosError);
 
       const errorMessage =
         axiosError.response?.data?.message ||

@@ -18,10 +18,13 @@ import {
   DatePicker,
   Tabs,
   Select,
-  InputNumber,
+  message,
 } from "antd";
 import {
   FileExcelOutlined,
+  FilePdfOutlined,
+  CaretDownOutlined,
+  DownloadOutlined,
   ReloadOutlined,
   SearchOutlined,
   WarningOutlined,
@@ -34,10 +37,13 @@ import {
 import type { ColumnsType } from "antd/es/table";
 import type { Dayjs } from "dayjs";
 import dayjs from "dayjs";
+import { Dropdown, Menu } from "antd";
 import axios from "axios";
 import * as XLSX from "xlsx";
 import Layout from "../../components/Layout";
 import Swal from "sweetalert2";
+import { useAuth } from "../../context/AuthContext";
+import { useLocation } from "react-router-dom";
 
 const apiUrl = import.meta.env.VITE_API_URL;
 const { Title, Text } = Typography;
@@ -121,8 +127,18 @@ interface VarianceResponse {
 
 // ===== COMPONENT =====
 const InventoryReport: React.FC = () => {
-  const currentStore = JSON.parse(localStorage.getItem("currentStore") || "{}");
-  const storeId = currentStore._id;
+  const { currentStore: authStore } = useAuth();
+  const location = useLocation();
+  const queryParams = new URLSearchParams(location.search);
+  const urlStoreId = queryParams.get("storeId");
+
+  // Ưu tiên store từ AuthContext, sau đó đến URL, cuối cùng là localStorage fallback
+  const currentStore =
+    authStore ||
+    (urlStoreId
+      ? { _id: urlStoreId }
+      : JSON.parse(localStorage.getItem("currentStore") || "{}"));
+  const storeId = currentStore?._id;
   const token = localStorage.getItem("token");
   const headers = { Authorization: `Bearer ${token}` };
 
@@ -130,7 +146,7 @@ const InventoryReport: React.FC = () => {
   const [varianceData, setVarianceData] = useState<VarianceData | null>(null);
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState("");
-  
+
   // Period selector states
   const [periodType, setPeriodType] = useState<string | null>(null);
   const [periodKey, setPeriodKey] = useState<string | null>(null);
@@ -139,9 +155,34 @@ const InventoryReport: React.FC = () => {
 
   // Helper: Format currency
   const formatCurrency = (value: number | MongoDecimal): string => {
-    const numValue = typeof value === "object" && value.$numberDecimal ? parseFloat(value.$numberDecimal) : Number(value);
+    const numValue =
+      typeof value === "object" && value.$numberDecimal
+        ? parseFloat(value.$numberDecimal)
+        : Number(value);
     return numValue.toLocaleString("vi-VN") + "₫";
   };
+
+  //  Helper: Check nếu sẵn sàng load variance report (có đủ điều kiện chọn)
+  const isReadyToLoad = (): boolean => {
+    if (!periodType) return false; // Chưa chọn loại kỳ
+    if (periodType === "custom") {
+      // Custom: cần có đầy đủ date range
+      return (
+        dateRange !== null &&
+        dateRange[0] !== undefined &&
+        dateRange[1] !== undefined
+      );
+    }
+    // Month/Quarter/Year: cần có periodKey
+    return periodKey !== null && periodKey !== "";
+  };
+
+  //  Reset variance data nếu không sẵn sàng load
+  useEffect(() => {
+    if (!isReadyToLoad()) {
+      setVarianceData(null); // Clear data khi người dùng allowClear
+    }
+  }, [periodType, periodKey, dateRange]);
 
   // Fetch realtime inventory - gọi ngay khi vào trang
   const fetchRealtimeReport = async () => {
@@ -153,16 +194,23 @@ const InventoryReport: React.FC = () => {
 
     setLoading(true);
     try {
-      const res = await axios.get<ReportResponse>(`${apiUrl}/inventory-reports`, {
-        params: { storeId },
-        headers,
-      });
+      const res = await axios.get<ReportResponse>(
+        `${apiUrl}/inventory-reports`,
+        {
+          params: { storeId },
+          headers,
+        }
+      );
 
       if (res.data.success) {
         setReportData(res.data.data);
       }
     } catch (err: any) {
-      Swal.fire("Lỗi", err?.response?.data?.message || "Không thể tải báo cáo tồn kho", "error");
+      Swal.fire(
+        "Lỗi",
+        err?.response?.data?.message || "Không thể tải báo cáo tồn kho",
+        "error"
+      );
       setReportData(null);
     } finally {
       setLoading(false);
@@ -170,7 +218,12 @@ const InventoryReport: React.FC = () => {
   };
 
   // Fetch variance report
-  const fetchVarianceReport = async (periodType?: string, periodKey?: string, monthFrom?: string, monthTo?: string) => {
+  const fetchVarianceReport = async (
+    periodType?: string,
+    periodKey?: string,
+    monthFrom?: string,
+    monthTo?: string
+  ) => {
     if (!storeId) {
       Swal.fire("Lỗi", "Không tìm thấy cửa hàng", "error");
       return;
@@ -184,16 +237,23 @@ const InventoryReport: React.FC = () => {
       if (monthFrom) params.monthFrom = monthFrom;
       if (monthTo) params.monthTo = monthTo;
 
-      const res = await axios.get<VarianceResponse>(`${apiUrl}/inventory-reports/variance`, {
-        params,
-        headers,
-      });
+      const res = await axios.get<VarianceResponse>(
+        `${apiUrl}/inventory-reports/variance`,
+        {
+          params,
+          headers,
+        }
+      );
 
       if (res.data.success) {
         setVarianceData(res.data.data);
       }
     } catch (err: any) {
-      Swal.fire("Lỗi", err?.response?.data?.message || "Không thể tải báo cáo biến thiên", "error");
+      Swal.fire(
+        "Lỗi",
+        err?.response?.data?.message || "Không thể tải báo cáo biến thiên",
+        "error"
+      );
       setVarianceData(null);
     } finally {
       setLoading(false);
@@ -205,109 +265,25 @@ const InventoryReport: React.FC = () => {
     fetchRealtimeReport();
   }, [storeId]);
 
-  // Export Excel - Realtime
-  const exportRealtimeExcel = () => {
-    if (!reportData) return;
+  // Export backend call
+  const handleExport = (format: string) => {
+    if (!storeId) return;
 
-    const ws_data: any[][] = [
-      [`BÁO CÁO TỒN KHO HIỆN TẠI - ${currentStore.name}`],
-      [`Thời điểm: ${new Date().toLocaleString("vi-VN")}`],
-      [],
-      ["STT", "Tên sản phẩm", "Mã SKU", "Tồn kho", "Giá vốn", "Giá trị tồn", "Cảnh báo"],
-    ];
-
-    reportData.details.forEach((item) => {
-      ws_data.push([
-        item.index,
-        item.productName,
-        item.sku,
-        item.closingStock,
-        parseFloat(item.costPrice.$numberDecimal),
-        item.closingValue,
-        item.lowStock ? "Tồn thấp" : "",
-      ]);
-    });
-
-    ws_data.push([]);
-    ws_data.push(["TỔNG CỘNG", "", "", reportData.summary.totalStock, "", reportData.summary.totalValue, ""]);
-
-    const ws = XLSX.utils.aoa_to_sheet(ws_data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Tồn kho hiện tại");
-    XLSX.writeFile(wb, `TonKho_HienTai_${new Date().toISOString().slice(0, 10)}.xlsx`);
-  };
-
-  // Export Excel - Variance Report
-  const exportVarianceExcel = () => {
-    if (!varianceData) return;
-
-    const { from, to } = varianceData.reportPeriod;
-    const ws_data: any[][] = [
-      [`BÁO CÁO BIẾN THIÊN TỒN KHO - ${currentStore.name}`],
-      [`Từ ngày: ${from} đến ${to}`],
-      [],
-      [
-        "STT",
-        "Sản phẩm",
-        "Mã SKU",
-        "Đơn vị",
-        "Tồn đầu kỳ",
-        "Nhập trong kỳ",
-        "Xuất trong kỳ",
-        "Tồn cuối kỳ",
-        "Giá vốn",
-        "COGS",
-        "Giá trị tồn đầu",
-        "Giá trị tồn cuối",
-      ],
-    ];
-
-    varianceData.details.forEach((item, idx) => {
-      ws_data.push([
-        idx + 1,
-        item.productName,
-        item.sku,
-        item.unit,
-        item.beginningStock,
-        item.importQty,
-        item.exportQty,
-        item.endingStock,
-        item.costPrice,
-        item.periodCOGS,
-        item.beginningValue,
-        item.endingValue,
-      ]);
-    });
-
-    ws_data.push([]);
-    ws_data.push([
-      "TỔNG CỘNG",
-      "",
-      "",
-      "",
-      varianceData.summary.totalBeginningStock,
-      varianceData.summary.totalImportQty,
-      varianceData.summary.totalExportQty,
-      varianceData.summary.totalEndingStock,
-      "",
-      varianceData.summary.totalCOGS,
-      "",
-      "",
-    ]);
-
-    const ws = XLSX.utils.aoa_to_sheet(ws_data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Biến thiên tồn kho");
-    XLSX.writeFile(wb, `TonKho_BiemThien_${from}_${to}.xlsx`);
-  };
-
-  // Export Excel
-  const exportExcel = () => {
-    if (activeTab === "realtime") {
-      exportRealtimeExcel();
-    } else {
-      exportVarianceExcel();
+    const params: any = { storeId, format, type: activeTab };
+    if (activeTab === "variance") {
+      if (periodType) params.periodType = periodType;
+      if (periodKey) params.periodKey = periodKey;
+      if (dateRange && dateRange[0] && dateRange[1]) {
+        params.monthFrom = dateRange[0].format("YYYY-MM");
+        params.monthTo = dateRange[1].format("YYYY-MM");
+      }
     }
+
+    const query = new URLSearchParams(params).toString();
+    const url = `${apiUrl}/inventory-reports/export?${query}&token=${token}`;
+
+    window.open(url, "_blank");
+    message.success(`Đang chuẩn bị file ${format.toUpperCase()}...`);
   };
 
   // Columns cho Variance Report
@@ -414,15 +390,20 @@ const InventoryReport: React.FC = () => {
   // Filter data
   const filteredData =
     reportData?.details.filter(
-      (item) => item.productName.toLowerCase().includes(searchText.toLowerCase()) || item.sku.toLowerCase().includes(searchText.toLowerCase())
+      (item) =>
+        item.productName.toLowerCase().includes(searchText.toLowerCase()) ||
+        item.sku.toLowerCase().includes(searchText.toLowerCase())
     ) || [];
 
   const filteredVarianceData =
     varianceData?.details.filter(
-      (item) => item.productName.toLowerCase().includes(searchText.toLowerCase()) || item.sku.toLowerCase().includes(searchText.toLowerCase())
+      (item) =>
+        item.productName.toLowerCase().includes(searchText.toLowerCase()) ||
+        item.sku.toLowerCase().includes(searchText.toLowerCase())
     ) || [];
 
-  const lowStockCount = reportData?.details.filter((item) => item.lowStock).length || 0;
+  const lowStockCount =
+    reportData?.details.filter((item) => item.lowStock).length || 0;
 
   // Table columns - chỉ còn lại những cột cần thiết cho realtime
   const columns: ColumnsType<ProductDetail> = [
@@ -466,7 +447,13 @@ const InventoryReport: React.FC = () => {
       align: "center",
       sorter: (a, b) => a.closingStock - b.closingStock,
       render: (val: number, record: ProductDetail) => (
-        <Text strong style={{ color: record.lowStock ? "#ff4d4f" : "#389e0d", fontSize: 15 }}>
+        <Text
+          strong
+          style={{
+            color: record.lowStock ? "#ff4d4f" : "#389e0d",
+            fontSize: 15,
+          }}
+        >
           {val}
         </Text>
       ),
@@ -541,16 +528,42 @@ const InventoryReport: React.FC = () => {
     <Layout>
       <div>
         {/* HEADER CARD */}
-        <Card bodyStyle={{ padding: "20px 24px 24px 24px" }} style={{ borderRadius: 12, border: "1px solid #8c8c8c", marginBottom: 24 }}>
+        <Card
+          bodyStyle={{ padding: "20px 24px 24px 24px" }}
+          style={{
+            borderRadius: 12,
+            border: "1px solid #8c8c8c",
+            marginBottom: 24,
+          }}
+        >
           {/* HEADER + NÚT + ALERT – TẤT CẢ TRONG MỘT DÒNG ĐẸP ĐẼ */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+              marginBottom: 16,
+            }}
+          >
             {/* Bên trái: Tên shop + tiêu đề */}
             <div>
-              <Title level={2} style={{ margin: 0, color: "#1890ff", lineHeight: 1.2 }}>
+              <Title
+                level={2}
+                style={{ margin: 0, color: "#1890ff", lineHeight: 1.2 }}
+              >
                 {currentStore.name || "Đang tải..."}
               </Title>
-              <Text style={{ color: "#595959", fontSize: "16px", display: "block", marginTop: 5 }}>
-                {activeTab === "realtime" ? "Báo cáo tồn kho hiện tại" : "Báo cáo biến thiên tồn kho"}
+              <Text
+                style={{
+                  color: "#595959",
+                  fontSize: "16px",
+                  display: "block",
+                  marginTop: 5,
+                }}
+              >
+                {activeTab === "realtime"
+                  ? "Báo cáo tồn kho hiện tại"
+                  : "Báo cáo biến thiên tồn kho"}
               </Text>
             </div>
 
@@ -562,10 +575,20 @@ const InventoryReport: React.FC = () => {
                   if (activeTab === "realtime") {
                     fetchRealtimeReport();
                   } else if (periodType) {
-                    if (periodType === "custom" && dateRange && dateRange[0] && dateRange[1]) {
+                    if (
+                      periodType === "custom" &&
+                      dateRange &&
+                      dateRange[0] &&
+                      dateRange[1]
+                    ) {
                       const monthFrom = dateRange[0].format("YYYY-MM");
                       const monthTo = dateRange[1].format("YYYY-MM");
-                      fetchVarianceReport("custom", undefined, monthFrom, monthTo);
+                      fetchVarianceReport(
+                        "custom",
+                        undefined,
+                        monthFrom,
+                        monthTo
+                      );
                     } else if (periodType !== "custom" && periodKey) {
                       fetchVarianceReport(periodType, periodKey);
                     }
@@ -576,20 +599,29 @@ const InventoryReport: React.FC = () => {
               >
                 Làm mới
               </Button>
-              <Button
-                type="primary"
-                icon={<FileExcelOutlined />}
-                onClick={exportExcel}
-                size="large"
-                style={{ background: "#52c41a", borderColor: "#52c41a" }}
+              <Dropdown
+                overlay={
+                  <Menu onClick={({ key }) => handleExport(key)}>
+                    <Menu.Item key="xlsx" icon={<FileExcelOutlined />}>
+                      Xuất Excel
+                    </Menu.Item>
+                    <Menu.Item key="pdf" icon={<FilePdfOutlined />}>
+                      Xuất PDF
+                    </Menu.Item>
+                  </Menu>
+                }
               >
-                Xuất Excel
-              </Button>
+                <Button type="primary" icon={<DownloadOutlined />} size="large">
+                  Xuất báo cáo <CaretDownOutlined />
+                </Button>
+              </Dropdown>
             </Space>
           </div>
 
           {/* Đường viền dưới */}
-          <div style={{ borderBottom: "2px solid #e8e8e8", margin: "16px 0" }} />
+          <div
+            style={{ borderBottom: "2px solid #e8e8e8", margin: "16px 0" }}
+          />
 
           {/* Alert */}
           {activeTab === "realtime" ? (
@@ -600,7 +632,14 @@ const InventoryReport: React.FC = () => {
               style={{ borderRadius: 8, marginBottom: 0 }}
             />
           ) : (
-            <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 16,
+                alignItems: "center",
+                flexWrap: "wrap",
+              }}
+            >
               <Text strong>Chọn loại kỳ báo cáo:</Text>
               <Select
                 style={{ width: 180 }}
@@ -656,10 +695,10 @@ const InventoryReport: React.FC = () => {
                     }}
                     allowClear
                     options={[
-                      { label: "Quý I (01-03)", value: "Q1" },
-                      { label: "Quý II (04-06)", value: "Q2" },
-                      { label: "Quý III (07-09)", value: "Q3" },
-                      { label: "Quý IV (10-12)", value: "Q4" },
+                      { label: "Quý 1", value: "Q1" },
+                      { label: "Quý 2", value: "Q2" },
+                      { label: "Quý 3", value: "Q3" },
+                      { label: "Quý 4", value: "Q4" },
                     ]}
                   />
                 </>
@@ -668,19 +707,19 @@ const InventoryReport: React.FC = () => {
               {periodType === "year" && (
                 <>
                   <Text strong>Chọn năm:</Text>
-                  <InputNumber
-                    style={{ width: 120 }}
-                    placeholder="Năm"
-                    min={2000}
-                    max={2100}
-                    value={periodKey ? parseInt(periodKey, 10) : null}
-                    onChange={(val) => {
-                      if (val) {
-                        const yearKey = val.toString();
+                  <DatePicker
+                    picker="year"
+                    placeholder="Chọn năm"
+                    value={periodKey ? dayjs(periodKey, "YYYY") : null}
+                    onChange={(date) => {
+                      if (date) {
+                        const yearKey = date.format("YYYY");
                         setPeriodKey(yearKey);
                         fetchVarianceReport("year", yearKey);
                       }
                     }}
+                    allowClear
+                    style={{ width: 160 }}
                   />
                 </>
               )}
@@ -695,7 +734,12 @@ const InventoryReport: React.FC = () => {
                       if (dates && dates[0] && dates[1]) {
                         const monthFrom = dates[0].format("YYYY-MM");
                         const monthTo = dates[1].format("YYYY-MM");
-                        fetchVarianceReport("custom", undefined, monthFrom, monthTo);
+                        fetchVarianceReport(
+                          "custom",
+                          undefined,
+                          monthFrom,
+                          monthTo
+                        );
                       }
                     }}
                     format="DD/MM/YYYY"
@@ -728,7 +772,13 @@ const InventoryReport: React.FC = () => {
                       {/* SUMMARY CARDS */}
                       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
                         <Col xs={12} sm={6}>
-                          <Card bordered={false} style={{ borderRadius: 12, border: "1px solid #8c8c8c" }}>
+                          <Card
+                            bordered={false}
+                            style={{
+                              borderRadius: 12,
+                              border: "1px solid #8c8c8c",
+                            }}
+                          >
                             <Statistic
                               title="Tổng sản phẩm"
                               value={reportData.summary.totalProducts}
@@ -739,7 +789,13 @@ const InventoryReport: React.FC = () => {
                           </Card>
                         </Col>
                         <Col xs={12} sm={6}>
-                          <Card bordered={false} style={{ borderRadius: 12, border: "1px solid #8c8c8c" }}>
+                          <Card
+                            bordered={false}
+                            style={{
+                              borderRadius: 12,
+                              border: "1px solid #8c8c8c",
+                            }}
+                          >
                             <Statistic
                               title="Tổng tồn kho"
                               value={reportData.summary.totalStock}
@@ -750,7 +806,13 @@ const InventoryReport: React.FC = () => {
                           </Card>
                         </Col>
                         <Col xs={12} sm={6}>
-                          <Card bordered={false} style={{ borderRadius: 12, border: "1px solid #8c8c8c" }}>
+                          <Card
+                            bordered={false}
+                            style={{
+                              borderRadius: 12,
+                              border: "1px solid #8c8c8c",
+                            }}
+                          >
                             <Statistic
                               title="Tổng giá trị tồn"
                               value={reportData.summary.totalValue}
@@ -761,13 +823,22 @@ const InventoryReport: React.FC = () => {
                           </Card>
                         </Col>
                         <Col xs={12} sm={6}>
-                          <Card bordered={false} style={{ borderRadius: 12, border: "1px solid #8c8c8c" }}>
+                          <Card
+                            bordered={false}
+                            style={{
+                              borderRadius: 12,
+                              border: "1px solid #8c8c8c",
+                            }}
+                          >
                             <Statistic
                               title="Tồn kho thấp"
                               value={lowStockCount}
                               prefix={<AlertOutlined />}
                               suffix={`/ ${reportData.summary.totalProducts}`}
-                              valueStyle={{ color: lowStockCount > 0 ? "#ff4d4f" : "#52c41a" }}
+                              valueStyle={{
+                                color:
+                                  lowStockCount > 0 ? "#ff4d4f" : "#52c41a",
+                              }}
                             />
                           </Card>
                         </Col>
@@ -803,7 +874,10 @@ const InventoryReport: React.FC = () => {
                             style={{ width: 500 }}
                           />
                         }
-                        style={{ borderRadius: 12, border: "1px solid #8c8c8c" }}
+                        style={{
+                          borderRadius: 12,
+                          border: "1px solid #8c8c8c",
+                        }}
                       >
                         <Table
                           columns={columns}
@@ -816,18 +890,43 @@ const InventoryReport: React.FC = () => {
                             showTotal: (total, range) => (
                               <div style={{ fontSize: 14, color: "#595959" }}>
                                 Đang xem{" "}
-                                <span style={{ color: "#1890ff", fontWeight: 600, fontSize: 15 }}>
+                                <span
+                                  style={{
+                                    color: "#1890ff",
+                                    fontWeight: 600,
+                                    fontSize: 15,
+                                  }}
+                                >
                                   {range[0]} – {range[1]}
                                 </span>{" "}
-                                trên tổng số <span style={{ color: "#d4380d", fontWeight: 600, fontSize: 15 }}>{total.toLocaleString("vi-VN")}</span> sản phẩm
+                                trên tổng số{" "}
+                                <span
+                                  style={{
+                                    color: "#d4380d",
+                                    fontWeight: 600,
+                                    fontSize: 15,
+                                  }}
+                                >
+                                  {total.toLocaleString("vi-VN")}
+                                </span>{" "}
+                                sản phẩm
                               </div>
                             ),
                           }}
                           scroll={{ x: 1000 }}
                           summary={() => (
                             <Table.Summary fixed>
-                              <Table.Summary.Row style={{ background: "#fafafa", fontWeight: "bold" }}>
-                                <Table.Summary.Cell index={0} colSpan={3} align="center">
+                              <Table.Summary.Row
+                                style={{
+                                  background: "#fafafa",
+                                  fontWeight: "bold",
+                                }}
+                              >
+                                <Table.Summary.Cell
+                                  index={0}
+                                  colSpan={3}
+                                  align="center"
+                                >
                                   TỔNG CỘNG
                                 </Table.Summary.Cell>
                                 <Table.Summary.Cell index={3} align="center">
@@ -838,12 +937,16 @@ const InventoryReport: React.FC = () => {
                                 <Table.Summary.Cell index={4} />
                                 <Table.Summary.Cell index={5} align="right">
                                   <Text strong style={{ color: "#1890ff" }}>
-                                    {formatCurrency(reportData.summary.totalCostPrice)}
+                                    {formatCurrency(
+                                      reportData.summary.totalCostPrice
+                                    )}
                                   </Text>
                                 </Table.Summary.Cell>
                                 <Table.Summary.Cell index={6} align="right">
                                   <Text strong style={{ color: "#faad14" }}>
-                                    {formatCurrency(reportData.summary.totalValue)}
+                                    {formatCurrency(
+                                      reportData.summary.totalValue
+                                    )}
                                   </Text>
                                 </Table.Summary.Cell>
                                 <Table.Summary.Cell index={7} />
@@ -862,7 +965,13 @@ const InventoryReport: React.FC = () => {
               label: "📈 Biến thiên tồn kho",
               children: (
                 <>
-                  {loading ? (
+                  {!isReadyToLoad() ? (
+                    // 🎯 Chưa chọn đủ điều kiện - yêu cầu người dùng chọn
+                    <Empty
+                      description="Vui lòng chọn loại kỳ báo cáo và kỳ cần xem"
+                      style={{ marginTop: 80 }}
+                    />
+                  ) : loading ? (
                     <Card style={{ textAlign: "center", padding: 80 }}>
                       <Spin size="large" tip="Đang tải báo cáo biến thiên..." />
                     </Card>
@@ -873,7 +982,13 @@ const InventoryReport: React.FC = () => {
                       {/* VARIANCE SUMMARY */}
                       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
                         <Col xs={12} sm={6}>
-                          <Card bordered={false} style={{ borderRadius: 12, border: "1px solid #8c8c8c" }}>
+                          <Card
+                            bordered={false}
+                            style={{
+                              borderRadius: 12,
+                              border: "1px solid #8c8c8c",
+                            }}
+                          >
                             <Statistic
                               title="Tồn đầu kỳ"
                               value={varianceData.summary.totalBeginningStock}
@@ -883,7 +998,13 @@ const InventoryReport: React.FC = () => {
                           </Card>
                         </Col>
                         <Col xs={12} sm={6}>
-                          <Card bordered={false} style={{ borderRadius: 12, border: "1px solid #8c8c8c" }}>
+                          <Card
+                            bordered={false}
+                            style={{
+                              borderRadius: 12,
+                              border: "1px solid #8c8c8c",
+                            }}
+                          >
                             <Statistic
                               title="Nhập trong kỳ"
                               value={varianceData.summary.totalImportQty}
@@ -893,7 +1014,13 @@ const InventoryReport: React.FC = () => {
                           </Card>
                         </Col>
                         <Col xs={12} sm={6}>
-                          <Card bordered={false} style={{ borderRadius: 12, border: "1px solid #8c8c8c" }}>
+                          <Card
+                            bordered={false}
+                            style={{
+                              borderRadius: 12,
+                              border: "1px solid #8c8c8c",
+                            }}
+                          >
                             <Statistic
                               title="Xuất trong kỳ"
                               value={varianceData.summary.totalExportQty}
@@ -903,7 +1030,13 @@ const InventoryReport: React.FC = () => {
                           </Card>
                         </Col>
                         <Col xs={12} sm={6}>
-                          <Card bordered={false} style={{ borderRadius: 12, border: "1px solid #8c8c8c" }}>
+                          <Card
+                            bordered={false}
+                            style={{
+                              borderRadius: 12,
+                              border: "1px solid #8c8c8c",
+                            }}
+                          >
                             <Statistic
                               title="Tồn cuối kỳ"
                               value={varianceData.summary.totalEndingStock}
@@ -916,15 +1049,63 @@ const InventoryReport: React.FC = () => {
 
                       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
                         <Col xs={24} sm={12}>
-                          <Card bordered={false} style={{ borderRadius: 12, border: "1px solid #8c8c8c", background: "#fafafa" }}>
-                            <Statistic
-                              title="Tổng COGS (Chi phí bán hàng)"
-                              value={varianceData.summary.totalCOGS}
-                              prefix={<DollarOutlined />}
-                              formatter={(v) => formatCurrency(v as number)}
-                              valueStyle={{ color: "#ff7a45", fontSize: 20 }}
-                            />
-                          </Card>
+                          <Tooltip
+                            overlayStyle={{ maxWidth: 320 }}
+                            title={
+                              <div>
+                                <div>
+                                  <strong>
+                                    Tổng COGS (Cost of Goods Sold)
+                                  </strong>{" "}
+                                  là tổng chi phí giá vốn của hàng hóa đã bán
+                                  trong kỳ báo cáo.
+                                </div>
+                                <div style={{ marginTop: 6 }}>
+                                  Chỉ bao gồm chi phí trực tiếp như nguyên vật
+                                  liệu, hàng nhập kho;
+                                  <strong> không bao gồm</strong> chi phí vận
+                                  hành, nhân sự hay thuê mặt bằng.
+                                </div>
+                              </div>
+                            }
+                          >
+                            {/*  span block để Tooltip không phá layout */}
+                            <span style={{ display: "block" }}>
+                              <Card
+                                bordered={false}
+                                style={{
+                                  borderRadius: 12,
+                                  border: "1px solid #8c8c8c",
+                                  background: "#fafafa",
+                                  cursor: "pointer",
+                                }}
+                              >
+                                <Statistic
+                                  title={
+                                    <span
+                                      style={{
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        gap: 6,
+                                      }}
+                                    >
+                                      Tổng COGS (Chi phí bán hàng)
+                                      <InfoCircleOutlined
+                                        style={{ color: "#1890ff" }}
+                                      />
+                                    </span>
+                                  }
+                                  value={varianceData.summary.totalCOGS}
+                                  prefix={<DollarOutlined />}
+                                  formatter={(v) => formatCurrency(v as number)}
+                                  valueStyle={{
+                                    color: "#ff7a45",
+                                    fontSize: 20,
+                                  }}
+                                />
+                              </Card>
+                            </span>
+                          </Tooltip>
                         </Col>
                       </Row>
 
@@ -945,7 +1126,10 @@ const InventoryReport: React.FC = () => {
                             style={{ width: 500 }}
                           />
                         }
-                        style={{ borderRadius: 12, border: "1px solid #8c8c8c" }}
+                        style={{
+                          borderRadius: 12,
+                          border: "1px solid #8c8c8c",
+                        }}
                       >
                         <Table
                           columns={varianceColumns}
@@ -958,18 +1142,43 @@ const InventoryReport: React.FC = () => {
                             showTotal: (total, range) => (
                               <div style={{ fontSize: 14, color: "#595959" }}>
                                 Đang xem{" "}
-                                <span style={{ color: "#1890ff", fontWeight: 600, fontSize: 15 }}>
+                                <span
+                                  style={{
+                                    color: "#1890ff",
+                                    fontWeight: 600,
+                                    fontSize: 15,
+                                  }}
+                                >
                                   {range[0]} – {range[1]}
                                 </span>{" "}
-                                trên tổng số <span style={{ color: "#d4380d", fontWeight: 600, fontSize: 15 }}>{total.toLocaleString("vi-VN")}</span> sản phẩm
+                                trên tổng số{" "}
+                                <span
+                                  style={{
+                                    color: "#d4380d",
+                                    fontWeight: 600,
+                                    fontSize: 15,
+                                  }}
+                                >
+                                  {total.toLocaleString("vi-VN")}
+                                </span>{" "}
+                                sản phẩm
                               </div>
                             ),
                           }}
                           scroll={{ x: "max-content" }}
                           summary={() => (
                             <Table.Summary fixed>
-                              <Table.Summary.Row style={{ background: "#fafafa", fontWeight: "bold" }}>
-                                <Table.Summary.Cell index={0} colSpan={4} align="center">
+                              <Table.Summary.Row
+                                style={{
+                                  background: "#fafafa",
+                                  fontWeight: "bold",
+                                }}
+                              >
+                                <Table.Summary.Cell
+                                  index={0}
+                                  colSpan={4}
+                                  align="center"
+                                >
                                   TỔNG CỘNG
                                 </Table.Summary.Cell>
                                 <Table.Summary.Cell index={4} align="center">
@@ -995,7 +1204,9 @@ const InventoryReport: React.FC = () => {
                                 <Table.Summary.Cell index={8} />
                                 <Table.Summary.Cell index={9} align="right">
                                   <Text strong style={{ color: "#ff7a45" }}>
-                                    {formatCurrency(varianceData.summary.totalCOGS)}
+                                    {formatCurrency(
+                                      varianceData.summary.totalCOGS
+                                    )}
                                   </Text>
                                 </Table.Summary.Cell>
                               </Table.Summary.Row>

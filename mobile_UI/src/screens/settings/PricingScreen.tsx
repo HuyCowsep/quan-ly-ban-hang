@@ -237,7 +237,7 @@ const PricingScreen: React.FC = () => {
 
       if (!checkoutUrl) throw new Error("Không tìm thấy link thanh toán");
 
-      // ✅ MỞ TRONG APP (WebView screen)
+      //  MỞ TRONG APP (WebView screen)
       navigation.navigate("PaymentWebView", { checkoutUrl });
     } catch (err: any) {
       Alert.alert(
@@ -292,7 +292,7 @@ const PricingScreen: React.FC = () => {
               {formatCurrency(
                 item.price_per_month ?? Math.round(item.price / item.duration)
               )}
-              đ/tháng
+              {"đ/tháng"}
             </Text>
 
             {item.discount_percent && item.discount_percent > 0 ? (

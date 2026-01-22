@@ -1,5 +1,6 @@
 //frontend/src/pages/inventory/InventoryVoucherPage.jsx
 import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Alert,
   Button,
@@ -91,7 +92,10 @@ const toNumberDecimal = (v) => {
   return 0;
 };
 
-const formatCurrency = (n) => new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 0 }).format(Number(n || 0));
+const formatCurrency = (n) => {
+  const val = toNumberDecimal(n);
+  return new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 0 }).format(val) + " ₫";
+};
 
 const statusColor = (stRaw) => {
   const st = normalizeStatus(stRaw);
@@ -204,6 +208,7 @@ const S = {
 };
 
 export default function InventoryVoucherPage() {
+  const navigate = useNavigate();
   const [api, notificationContextHolder] = notification.useNotification();
   const [modal, modalContextHolder] = Modal.useModal();
   // Warehouses
@@ -244,9 +249,57 @@ export default function InventoryVoucherPage() {
   const [products, setProducts] = useState([]);
   const [loadingProducts, setLoadingProducts] = useState(false);
 
-  // suppliers (NEW)
   const [suppliers, setSuppliers] = useState([]);
   const [loadingSuppliers, setLoadingSuppliers] = useState(false);
+
+  // Ref Voucher Logic (NEW)
+  const [refVoucherModalOpen, setRefVoucherModalOpen] = useState(false);
+  const [refVouchers, setRefVouchers] = useState([]);
+  const [loadingRef, setLoadingRef] = useState(false);
+
+  const fetchRefVouchers = async () => {
+    try {
+      setLoadingRef(true);
+      const supId = form.getFieldValue("supplier_id");
+      const res = await getInventoryVouchers(storeId, { type: "IN", status: "COMPLETED", supplier_id: supId, limit: 20 });
+      if (res && res.data) {
+        setRefVouchers(res.data);
+      }
+    } catch (error) {
+       notification.error({ message: "Lỗi tải phiếu nhập", description: error.message });
+    } finally {
+      setLoadingRef(false);
+    }
+  };
+
+  const handleSelectRefVoucher = (v) => {
+      const itemsArr = v.items || [];
+      const newItems = itemsArr.map(it => {
+          // Try to find product for full info
+          const p = products.find(prod => prod._id === it.product_id || prod.id === it.product_id);
+          return {
+             product_id: it.product_id,
+             sku_snapshot: p ? p.sku : (it.sku_snapshot || it.sku || ""),
+             name_snapshot: p ? p.name : (it.name_snapshot || it.product_name || ""),
+             unit_snapshot: p ? p.unit : (it.unit_snapshot || it.unit || ""),
+             qty_actual: it.qty_actual || it.quantity || 1,
+             unit_cost: toNumberDecimal(it.unit_cost),
+             selling_price: 0,
+             batch_no: it.batch_no || "",
+             expiry_date: it.expiry_date ? dayjs(it.expiry_date) : null,
+             note: ""
+          };
+      });
+
+      const currentItems = form.getFieldValue("items") || [];
+      form.setFieldsValue({ items: [...currentItems, ...newItems] });
+      setRefVoucherModalOpen(false);
+      
+      if (v.supplier_id) {
+           form.setFieldsValue({ supplier_id: v.supplier_id });
+           // Auto-set receiver if needed?
+      }
+  };
 
   // filters
   const [q, setQ] = useState("");
@@ -406,8 +459,11 @@ export default function InventoryVoucherPage() {
     const s = suppliers.find((x) => String(x?._id) === String(supplierId));
     if (!s) return;
 
-    // auto-fill: người giao + thông tin NCC
-    form.setFieldsValue({
+    const type = form.getFieldValue("type");
+    const isOut = type === "OUT" || type === "RETURN"; // Nếu bạn có loại RETURN riêng thì thêm vào
+    
+    // Base supplier info
+    const updates = {
       supplier_id: s._id,
       supplier_name_snapshot: s.name || "",
       supplier_phone_snapshot: s.phone || "",
@@ -415,14 +471,25 @@ export default function InventoryVoucherPage() {
       supplier_address_snapshot: s.address || "",
       supplier_taxcode_snapshot: s.taxcode || "",
       supplier_contact_person_snapshot: s.contact_person || "",
+    };
 
-      deliverer_name: s.contact_person || s.name || "",
-      deliverer_phone: s.phone || "",
+    if (isOut) {
+      // Xuất trả: Cửa hàng giao -> NCC nhận
+      updates.deliverer_name = form.getFieldValue("deliverer_name") || userDisplayName || "";
+      updates.deliverer_phone = form.getFieldValue("deliverer_phone") || userPhone || "";
 
-      // receiver: mặc định user
-      receiver_name: form.getFieldValue("receiver_name") || userDisplayName || "",
-      receiver_phone: form.getFieldValue("receiver_phone") || userPhone || "",
-    });
+      updates.receiver_name = s.contact_person || s.name || "";
+      updates.receiver_phone = s.phone || "";
+    } else {
+      // Nhập: NCC giao -> Cửa hàng nhận
+      updates.deliverer_name = s.contact_person || s.name || "";
+      updates.deliverer_phone = s.phone || "";
+
+      updates.receiver_name = form.getFieldValue("receiver_name") || userDisplayName || "";
+      updates.receiver_phone = form.getFieldValue("receiver_phone") || userPhone || "";
+    }
+
+    form.setFieldsValue(updates);
   };
   const warehouseOptions = useMemo(() => {
     return warehouses.map((w) => {
@@ -469,6 +536,9 @@ export default function InventoryVoucherPage() {
     setEditingVoucher(null);
     setIsModalOpen(true);
 
+    // Find default warehouse
+    const defaultWh = warehouses.find((w) => w.is_default) || warehouses[0] || null;
+
     form.resetFields();
     form.setFieldsValue({
       type: "IN",
@@ -488,7 +558,7 @@ export default function InventoryVoucherPage() {
 
       // nâng cao
       attached_docs: 0,
-      warehouse_id: defaultWh?.id || null,
+      warehouse_id: defaultWh?._id || defaultWh?.id || null,
       warehouse_name: defaultWh?.name || "",
       warehousename: defaultWh?.name || "",
 
@@ -518,6 +588,11 @@ export default function InventoryVoucherPage() {
       if (!v) throw new Error("Không có dữ liệu phiếu");
 
       form.resetFields();
+      
+      // Handle warehouses carefully
+      const whId = v.warehouse_id?._id || v.warehouse_id || null;
+      
+      // Map đúng theo cấu trúc API trả về
       form.setFieldsValue({
         type: v.type,
         voucher_code: v.voucher_code,
@@ -527,44 +602,50 @@ export default function InventoryVoucherPage() {
 
         deliverer_name: v.deliverer_name || "",
         receiver_name: v.receiver_name || "",
-        deliverer_phone: v.deliverer_phone || "",
-        receiver_phone: v.receiver_phone || "",
+        deliverer_phone: v.deliverer_phone || "", // Thêm field này
+        receiver_phone: v.receiver_phone || "",   // Thêm field này
 
-        warehouse_id: v.warehouse_id || null,
+        warehouse_id: whId,
         warehouse_name: v.warehouse_name || "",
         warehousename: v.warehouse_name || "",
         warehouse_location: v.warehouse_location || "",
         ref_no: v.ref_no || "",
         ref_date: v.ref_date ? dayjs(v.ref_date) : null,
 
-        // NEW: supplier (nếu backend có lưu)
-        supplier_id: v.supplier_id || v.supplier?._id || null,
-        supplier_name_snapshot: v.supplier_name_snapshot || v.supplier?.name || "",
-        supplier_phone_snapshot: v.supplier_phone_snapshot || v.supplier?.phone || "",
-        supplier_email_snapshot: v.supplier_email_snapshot || v.supplier?.email || "",
-        supplier_address_snapshot: v.supplier_address_snapshot || v.supplier?.address || "",
-        supplier_taxcode_snapshot: v.supplier_taxcode_snapshot || v.supplier?.taxcode || "",
-        supplier_contact_person_snapshot: v.supplier_contact_person_snapshot || v.supplier?.contact_person || "",
+        // FIX: Map đúng supplier fields từ API response (v.supplier_id có thể là object populated)
+        supplier_id: v.supplier_id?._id || v.supplier_id || null, 
+        
+        supplier_name_snapshot: v.supplier_name_snapshot || v.partner_name || v.supplier_id?.name || "",
+        supplier_phone_snapshot: v.supplier_phone_snapshot || v.partner_phone || v.supplier_id?.phone || "",
+        supplier_email_snapshot: v.supplier_email_snapshot || v.supplier_id?.email || "",
+        supplier_address_snapshot: v.supplier_address_snapshot || v.partner_address || v.supplier_id?.address || "",
+        supplier_taxcode_snapshot: v.supplier_taxcode_snapshot || v.supplier_id?.taxcode || "",
+        supplier_contact_person_snapshot: v.supplier_contact_person_snapshot || v.supplier_id?.contact_person || "",
 
+        // FIX: Map items với supplier_id là object
         items: (v.items || []).map((it) => ({
-          product_id: it.product_id?._id || it.product_id,
-          sku_snapshot: it.sku_snapshot || "",
-          name_snapshot: it.name_snapshot || "",
-          unit_snapshot: it.unit_snapshot || "",
+          product_id: it.product_id?._id || it.product_id, // ensure ID string for Select
+          sku_snapshot: it.sku_snapshot || it.product_id?.sku || "",
+          name_snapshot: it.name_snapshot || it.product_id?.name || "",
+          unit_snapshot: it.unit_snapshot || it.product_id?.unit || "",
           qty_actual: Number(it.qty_actual || 0),
           unit_cost: toNumberDecimal(it.unit_cost),
+          selling_price: toNumberDecimal(it.selling_price),
+          batch_no: it.batch_no || "",
+          expiry_date: it.expiry_date ? dayjs(it.expiry_date) : null,
           note: it.note || "",
         })),
       });
 
-      // nếu phiếu NHẬP có supplier_id nhưng snapshot trống, thử fill từ list hiện tại
+      // Auto-fill supplier nếu có supplier_id nhưng chưa có snapshot
       const t = v.type;
-      const sid = v.supplier_id || v.supplier?._id || null;
+      const sid = v.supplier_id?._id || v.supplier_id;
       if (t === "IN" && sid) {
         const snap = form.getFieldValue("supplier_name_snapshot");
         if (!snap) setSupplierToForm(sid);
       }
     } catch (err) {
+      console.error(err);
       api.error({
         message: "Không thể mở phiếu để sửa",
         description: err?.response?.data?.message || err?.message || "Vui lòng thử lại.",
@@ -574,6 +655,7 @@ export default function InventoryVoucherPage() {
       setEditingVoucher(null);
     }
   };
+
 
   const closeModal = () => {
     setIsModalOpen(false);
@@ -585,7 +667,48 @@ export default function InventoryVoucherPage() {
     try {
       const values = await form.validateFields();
 
-      // NEW: nếu NHẬP mà chưa chọn NCC => warn (bạn có thể bỏ rule này nếu muốn optional)
+      // Comprehensive validation
+      const errors = [];
+      
+      if (!values.warehouse_id) errors.push("Vui lòng chọn kho hàng");
+      if (!values.reason?.trim()) errors.push("Vui lòng nhập lý do nhập/xuất kho");
+      if (!values.deliverer_name?.trim()) errors.push("Vui lòng nhập tên người giao");
+      if (!values.receiver_name?.trim()) errors.push("Vui lòng nhập tên người nhận");
+      
+      // Validate items
+      const itemErrors = [];
+      const voucherDate = values.voucher_date ? dayjs(values.voucher_date) : dayjs();
+      
+      (values.items || []).forEach((item, idx) => {
+        if (item?.product_id) {
+          if (!item.qty_actual || item.qty_actual <= 0) {
+            itemErrors.push(`Dòng ${idx + 1}: Số lượng phải > 0`);
+          }
+          // Validate expiry date >= voucher date for IN vouchers
+          if (values.type === "IN" && item.expiry_date) {
+            const expiryDate = dayjs(item.expiry_date);
+            if (expiryDate.isBefore(voucherDate, 'day')) {
+              itemErrors.push(`Dòng ${idx + 1}: Lỗi nhập liệu: Hạn sử dụng không được phép nhỏ hơn ngày nhập kho. Vui lòng kiểm tra lại ngày sản phẩm để tránh nhập hàng hết hạn.`);
+            }
+          }
+        }
+      });
+      
+      if (errors.length > 0 || itemErrors.length > 0) {
+        const allErrors = [...errors, ...itemErrors];
+        return api.error({
+          message: "Lỗi nhập liệu",
+          description: (
+            <ul style={{ margin: 0, paddingLeft: 16 }}>
+              {allErrors.map((err, i) => <li key={i}>{err}</li>)}
+            </ul>
+          ),
+          placement: "topRight",
+          duration: 6,
+        });
+      }
+
+      // Warn if import without supplier
       if (values.type === "IN" && !values.supplier_id) {
         return api.warning({
           message: "Thiếu nhà cung cấp",
@@ -617,6 +740,12 @@ export default function InventoryVoucherPage() {
           ? {
               supplier_id: values.supplier_id,
               supplier_name_snapshot: values.supplier_name_snapshot || "",
+              
+              // Map supplier snapshot fields to partner fields for backend override
+              partner_name: values.supplier_name_snapshot || "",
+              partner_phone: values.supplier_phone_snapshot || "",
+              partner_address: values.supplier_address_snapshot || "",
+
               supplier_phone_snapshot: values.supplier_phone_snapshot || "",
               supplier_email_snapshot: values.supplier_email_snapshot || "",
               supplier_address_snapshot: values.supplier_address_snapshot || "",
@@ -631,6 +760,9 @@ export default function InventoryVoucherPage() {
             product_id: x.product_id,
             qty_actual: Number(x.qty_actual || 0),
             unit_cost: Number(x.unit_cost || 0),
+            selling_price: Number(x.selling_price || 0),
+            batch_no: x.batch_no || "",
+            expiry_date: x.expiry_date ? x.expiry_date.toISOString() : null,
             note: x.note || "",
             sku_snapshot: x.sku_snapshot || "",
             name_snapshot: x.name_snapshot || "",
@@ -865,6 +997,13 @@ export default function InventoryVoucherPage() {
   const productOptions = useMemo(() => {
     return (products || []).map((p) => {
       const stock = safeNumber(p.stockquantity ?? p.stock_quantity ?? 0, 0);
+      
+      // Tính tồn kho khả dụng (không tính hàng hết hạn)
+      const avail = (p.batches || []).reduce((sum, b) => {
+        const isExpired = b.expiry_date && new Date(b.expiry_date) < new Date();
+        return isExpired ? sum : sum + (b.quantity || 0);
+      }, p.batches?.length > 0 ? 0 : stock); // Nếu ko có lô thì dùng tồn tổng (mặc định)
+
       const cost = toNumberDecimal(p.costprice ?? p.cost_price ?? 0);
       const price = toNumberDecimal(p.price ?? 0);
       const unit = p.unit || "Trống";
@@ -875,7 +1014,7 @@ export default function InventoryVoucherPage() {
         value: getId(p),
         label: `${name} (${sku})`,
         searchText: `${name} ${sku} ${unit}`.toLowerCase(),
-        meta: { name, sku, unit, stock, cost, price },
+        meta: { name, sku, unit, stock, avail, cost, price },
       };
     });
   }, [products]);
@@ -1010,11 +1149,11 @@ export default function InventoryVoucherPage() {
       title: "Tổng tiền",
       dataIndex: "total_cost",
       key: "total_cost",
-      width: 110,
+      width: 140,
       align: "right",
       render: (v, r) => {
         const cost = v ?? computeTotalsFromItems(r?.items || []).totalCost;
-        return <Text strong>{formatCurrency(toNumberDecimal(cost))}</Text>;
+        return <Text strong style={{ color: "#057a55" }}>{formatCurrency(toNumberDecimal(cost))}</Text>;
       },
     },
     {
@@ -1143,6 +1282,15 @@ export default function InventoryVoucherPage() {
                   Tạo phiếu
                 </Button>
 
+                <Button
+                  size="medium"
+                  danger
+                  icon={<ExclamationCircleOutlined />}
+                  onClick={() => navigate("/inventory/process-expired")}
+                >
+                  Xử lý hàng hết hạn
+                </Button>
+
                 <Tooltip title="Tải lại danh sách nhà cung cấp">
                   <Button size="medium" onClick={fetchSuppliers} loading={loadingSuppliers}>
                     Tải nhà cung cấp
@@ -1261,7 +1409,7 @@ export default function InventoryVoucherPage() {
                   fontWeight: "bold",
                 }}
               >
-                {editingVoucher ? "✏️" : "📦"}
+                {editingVoucher ? "" : ""}
               </div>
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 20, fontWeight: 800, color: "#0f172a" }}>{editingVoucher ? "Cập nhật phiếu kho" : "Tạo phiếu kho mới"}</div>
@@ -1348,14 +1496,17 @@ export default function InventoryVoucherPage() {
             size="middle"
             requiredMark="optional"
             colon={false}
-            onValuesChange={(changed) => {
-              // Trigger totalsLive recalculation whenever form values change
+            onValuesChange={(changed, allValues) => {
               setFormChangeKey((k) => k + 1);
 
-              if (Object.prototype.hasOwnProperty.call(changed, "type")) {
+              // Auto-fill Logic
+              if (changed.type) {
                 const t = changed.type;
+                
                 if (t === "OUT") {
                   form.setFieldsValue({
+                    deliverer_name: userDisplayName || "",
+                    receiver_name: "",
                     supplier_id: null,
                     supplier_name_snapshot: "",
                     supplier_phone_snapshot: "",
@@ -1364,10 +1515,30 @@ export default function InventoryVoucherPage() {
                     supplier_taxcode_snapshot: "",
                     supplier_contact_person_snapshot: "",
                   });
-                } else {
+                } else if (t === "RETURN") {
+                   form.setFieldsValue({
+                      deliverer_name: userDisplayName || "", 
+                      // Clear receiver to wait for supplier selection
+                      receiver_name: "",
+                      receiver_phone: "",
+                      supplier_id: null,
+                   });
+                } else { // IN
                   const rn = form.getFieldValue("receiver_name");
                   if (!rn) form.setFieldsValue({ receiver_name: userDisplayName || "", receiver_phone: userPhone || "" });
+                  form.setFieldsValue({ deliverer_name: "" });
                 }
+              }
+
+              // Auto-fill receiver when supplier selected for RETURN
+              if (changed.supplier_id && allValues.type === "RETURN") {
+                 const sup = suppliers.find(s => s._id === changed.supplier_id);
+                 if (sup) {
+                    form.setFieldsValue({
+                        receiver_name: sup.contact_person || sup.name || "",
+                        receiver_phone: sup.phone || ""
+                    });
+                 }
               }
             }}
           >
@@ -1425,7 +1596,7 @@ export default function InventoryVoucherPage() {
                 </Col>
 
                 <Col xs={24} md={12}>
-                  <Form.Item name="reason" label="Lý do" rules={[{ required: true, message: "Nhập lý do" }]}>
+                  <Form.Item name="reason" label={<span>Lý do <span style={{ color: '#ff4d4f' }}>*</span></span>} rules={[{ required: true, message: "Vui lòng nhập lý do nhập/xuất kho" }]}>
                     <Input placeholder="VD: Nhập hàng từ NCC / Xuất bán lẻ / Xuất hủy..." size="large" style={{ borderRadius: 10 }} />
                   </Form.Item>
                 </Col>
@@ -1460,7 +1631,7 @@ export default function InventoryVoucherPage() {
             <Form.Item shouldUpdate noStyle>
               {() => {
                 const t = form.getFieldValue("type");
-                if (t !== "IN") return null;
+                if (t !== "IN" && t !== "OUT") return null;
 
                 return (
                   <Card
@@ -1484,7 +1655,7 @@ export default function InventoryVoucherPage() {
                         gap: 8,
                       }}
                     >
-                      <span>🏢</span> Nhà cung cấp
+                      <span></span> Nhà cung cấp
                     </div>
 
                     <Row gutter={20}>
@@ -1573,12 +1744,12 @@ export default function InventoryVoucherPage() {
                   children: (
                     <Row gutter={20}>
                       <Col xs={24} md={8}>
-                        <Form.Item name="warehouse_id" label="Kho lưu trữ">
+                        <Form.Item name="warehouse_id" label={<span>Kho lưu trữ <span style={{ color: '#ff4d4f' }}>*</span></span>} rules={[{ required: true, message: "Vui lòng chọn kho hàng" }]}>
                           <Select
                             showSearch
                             allowClear
                             size="large"
-                            placeholder="Chọn kho (mặc định theo cửa hàng)"
+                            placeholder="Bấm để chọn kho hàng..."
                             options={warehouseOptions}
                             loading={loadingWarehouses}
                             filterOption={filterWarehouseOption}
@@ -1618,13 +1789,13 @@ export default function InventoryVoucherPage() {
                       </Col>
 
                       <Col xs={24} md={5}>
-                        <Form.Item name="ref_no" label="Số chứng từ gốc">
-                          <Input placeholder="VD: HD00123" size="large" style={{ borderRadius: 10 }} />
+                        <Form.Item name="ref_no" label={<span>Số chứng từ gốc <Tooltip title="Bắt buộc khi ghi sổ"><span style={{ color: '#fa8c16', fontSize: 11 }}>(Ghi sổ *)</span></Tooltip></span>}>
+                          <Input placeholder="VD: Số hóa đơn/phiếu giao hàng" size="large" style={{ borderRadius: 10 }} rules={[{ required: true, message: "Vui lòng nhập số chứng từ gốc" }]} />
                         </Form.Item>
                       </Col>
 
                       <Col xs={24} md={6}>
-                        <Form.Item name="ref_date" label="Ngày chứng từ gốc">
+                        <Form.Item name="ref_date" label={<span>Ngày chứng từ gốc <Tooltip title="Bắt buộc khi ghi sổ"><span style={{ color: '#fa8c16', fontSize: 11 }}>(Ghi sổ *)</span></Tooltip></span>}>
                           <DatePicker style={{ width: "100%", borderRadius: 10 }} format="DD/MM/YYYY" size="large" />
                         </Form.Item>
                       </Col>
@@ -1647,7 +1818,7 @@ export default function InventoryVoucherPage() {
                   gap: 8,
                 }}
               >
-                <span>📋</span> Danh sách hàng hóa
+                <span></span> Danh sách hàng hóa
               </div>
 
               <Card
@@ -1667,20 +1838,29 @@ export default function InventoryVoucherPage() {
                     borderRadius: "16px 16px 0 0",
                   }}
                 >
-                  <Row gutter={20} align="middle">
-                    <Col xs={24} md={10}>
+                  <Row gutter={12} align="middle">
+                    <Col xs={24} md={5}>
                       <div style={{ fontWeight: 700, color: "#334155" }}>Sản phẩm</div>
                     </Col>
-                    <Col xs={8} md={3}>
-                      <div style={{ fontWeight: 700, color: "#334155", textAlign: "center" }}>Số lượng</div>
+                    <Col xs={6} md={2}>
+                      <div style={{ fontWeight: 700, color: "#334155", textAlign: "center" }}>SL</div>
                     </Col>
-                    <Col xs={8} md={3}>
-                      <div style={{ fontWeight: 700, color: "#334155", textAlign: "right" }}>Đơn giá</div>
+                    <Col xs={6} md={2}>
+                      <div style={{ fontWeight: 700, color: "#334155", textAlign: "right" }}>Giá vốn</div>
                     </Col>
-                    <Col xs={8} md={3}>
+                    <Col xs={6} md={2}>
+                      <div style={{ fontWeight: 700, color: "#334155", textAlign: "right" }}>Giá bán</div>
+                    </Col>
+                    <Col xs={6} md={2}>
                       <div style={{ fontWeight: 700, color: "#334155", textAlign: "right" }}>Thành tiền</div>
                     </Col>
-                    <Col xs={24} md={4}>
+                    <Col xs={8} md={3}>
+                      <div style={{ fontWeight: 700, color: "#334155" }}>Hạn SD</div>
+                    </Col>
+                    <Col xs={8} md={2}>
+                      <div style={{ fontWeight: 700, color: "#334155" }}>Số lô</div>
+                    </Col>
+                    <Col xs={8} md={5}>
                       <div style={{ fontWeight: 700, color: "#334155" }}>Ghi chú</div>
                     </Col>
                     <Col xs={24} md={1} />
@@ -1702,8 +1882,8 @@ export default function InventoryVoucherPage() {
                           onMouseEnter={(e) => (e.currentTarget.style.background = "#f0fdf4")}
                           onMouseLeave={(e) => (e.currentTarget.style.background = idx % 2 === 0 ? "#ffffff" : "#fafbfc")}
                         >
-                          <Row gutter={20} align="middle">
-                            <Col xs={24} md={10}>
+                          <Row gutter={12} align="middle">
+                            <Col xs={24} md={5}>
                               <Form.Item
                                 {...restField}
                                 name={[name, "product_id"]}
@@ -1712,33 +1892,33 @@ export default function InventoryVoucherPage() {
                               >
                                 <Select
                                   showSearch
-                                  placeholder="Tìm tên / SKU sản phẩm..."
+                                  placeholder="Sản phẩm..."
                                   options={productOptions}
                                   filterOption={filterProductOption}
-                                  size="large"
-                                  style={{ borderRadius: 10 }}
-                                  popupMatchSelectWidth={560}
+                                  size="middle"
+                                  style={{ borderRadius: 8 }}
+                                  popupMatchSelectWidth={480}
                                   optionRender={(opt) => {
                                     const d = opt?.data;
                                     const meta = d?.meta || {};
                                     return (
                                       <div style={{ lineHeight: 1.3 }}>
                                         <div style={{ fontWeight: 700, ...S.ellipsis1 }}>
-                                          {meta.name || d?.label} <Text type="secondary">(Mã sku: {meta.sku || "Trống"})</Text>
+                                          {meta.name || d?.label} <Text type="secondary">(SKU: {meta.sku || "Trống"})</Text>
                                         </div>
-                                        <div style={{ fontSize: 12, color: "#64748b" }}>
-                                          Đơn vị tính:{" "}
-                                          <Tag color="blue" style={{ fontSize: 12 }}>
+                                        <div style={{ fontSize: 11, color: "#64748b" }}>
+                                          <Tag color="blue" style={{ fontSize: 11 }}>
                                             {meta.unit || "Trống"}
                                           </Tag>
-                                          • Tồn:{" "}
-                                          <Tag color="blue" style={{ fontSize: 12 }}>
-                                            {(meta.stock ?? 0).toLocaleString("vi-VN")}
-                                          </Tag>{" "}
-                                          • Giá vốn:{" "}
-                                          <Tag color="blue" style={{ fontSize: 12 }}>
-                                            {formatCurrency(meta.cost ?? 0)}
+                                          • Khả dụng:{" "}
+                                          <Tag color={meta.avail > 0 ? "success" : "error"} style={{ fontSize: 11 }}>
+                                            {(meta.avail ?? 0).toLocaleString("vi-VN")}
                                           </Tag>
+                                          {meta.stock > meta.avail && (
+                                            <>
+                                              {" "}• Tổng: <Text delete type="secondary" style={{ fontSize: 11 }}>{meta.stock}</Text>
+                                            </>
+                                          )}
                                         </div>
                                       </div>
                                     );
@@ -1750,90 +1930,227 @@ export default function InventoryVoucherPage() {
                                     const items = form.getFieldValue("items") || [];
                                     const next = items.map((it, i) => {
                                       if (i !== idx) return it;
-                                      const currentUnitCost = it?.unit_cost !== undefined ? it.unit_cost : undefined;
+                                      // Always auto-fill price from product when selecting
                                       return {
                                         ...it,
                                         sku_snapshot: p.sku || "",
                                         name_snapshot: p.name || "",
                                         unit_snapshot: p.unit || "",
-                                        unit_cost:
-                                          currentUnitCost !== undefined ? currentUnitCost : toNumberDecimal(p.costprice ?? p.cost_price ?? 0),
+                                        unit_cost: toNumberDecimal(p.costprice ?? p.cost_price ?? 0),
+                                        selling_price: toNumberDecimal(p.price ?? 0),
                                       };
                                     });
                                     form.setFieldsValue({ items: next });
+                                    setFormChangeKey((k) => k + 1); // Trigger re-render for totals
                                   }}
                                 />
                               </Form.Item>
                             </Col>
 
-                            <Col xs={8} md={3}>
+                            <Col xs={6} md={2}>
                               <Form.Item
                                 {...restField}
                                 name={[name, "qty_actual"]}
-                                rules={[
-                                  { required: true, message: "Nhập Số lượng" },
-                                  { type: "number", min: 1, message: "SL >= 1" },
-                                ]}
-                                style={{ marginBottom: 0 }}
-                              >
-                                <InputNumber min={1} style={{ width: "100%", borderRadius: 10 }} size="large" />
+                                 rules={[
+                                   { required: true, message: "Nhập SL" },
+                                   { type: "number", min: 1, message: ">= 1" },
+                                   ({ getFieldValue }) => ({
+                                     validator(_, value) {
+                                       const type = getFieldValue("type");
+                                       if (type !== "OUT") return Promise.resolve();
+                                       
+                                       const items = getFieldValue("items") || [];
+                                       const it = items[idx];
+                                       if (!it?.product_id) return Promise.resolve();
+                                       
+                                       const p = products.find(x => getId(x) === it.product_id);
+                                       if (!p) return Promise.resolve();
+                                       
+                                       // Tính avail
+                                       const avail = (p.batches || []).reduce((sum, b) => {
+                                         const isExpired = b.expiry_date && new Date(b.expiry_date) < new Date();
+                                         return isExpired ? sum : sum + (b.quantity || 0);
+                                       }, p.batches?.length > 0 ? 0 : (p.stock_quantity || 0));
+                                       
+                                       if (value > avail) {
+                                         return Promise.reject(new Error(`Tối đa ${avail}`));
+                                       }
+                                       return Promise.resolve();
+                                     },
+                                   }),
+                                 ]}
+                                 style={{ marginBottom: 0 }}
+                               >
+                                <InputNumber min={1} style={{ width: "100%", borderRadius: 8 }} size="middle" />
                               </Form.Item>
                             </Col>
 
-                            <Col xs={8} md={3}>
+                            <Col xs={6} md={2}>
                               <Form.Item {...restField} name={[name, "unit_cost"]} rules={[{ type: "number", min: 0 }]} style={{ marginBottom: 0 }}>
                                 <InputNumber
                                   min={0}
+                                  placeholder="Giá vốn"
+                                  style={{ width: "100%", borderRadius: 8 }}
+                                  size="middle"
                                   formatter={(value) => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
-                                  style={{ width: "100%", borderRadius: 10 }}
-                                  size="large"
+                                  parser={(value) => value.replace(/\$\s?|(,*)/g, "")}
                                 />
                               </Form.Item>
                             </Col>
 
-                            <Col xs={8} md={3}>
+                            <Col xs={6} md={2}>
+                              <Form.Item {...restField} name={[name, "selling_price"]} rules={[{ type: "number", min: 0 }]} style={{ marginBottom: 0 }}>
+                                <InputNumber
+                                  min={0}
+                                  placeholder="Giá bán"
+                                  style={{ width: "100%", borderRadius: 8 }}
+                                  size="middle"
+                                  formatter={(value) => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
+                                  parser={(value) => value.replace(/\$\s?|(,*)/g, "")}
+                                />
+                              </Form.Item>
+                            </Col>
+
+                            <Col xs={6} md={2}>
                               <Form.Item shouldUpdate noStyle>
                                 {() => {
                                   const items = form.getFieldValue("items") || [];
                                   const it = items[idx] || {};
                                   const line = computeLineCost(it?.qty_actual, it?.unit_cost);
                                   return (
-                                    <div style={{ textAlign: "right", fontSize: 15, fontWeight: 700, color: "#16a34a" }}>{formatCurrency(line)}</div>
+                                    <div style={{ textAlign: "right", fontWeight: 700, color: "#16a34a", fontSize: 13, paddingTop: 6 }}>
+                                      {formatCurrency(line)}
+                                    </div>
                                   );
                                 }}
                               </Form.Item>
                             </Col>
 
-                            <Col xs={24} md={4}>
+                            <Col xs={8} md={3}>
+                              <Form.Item {...restField} name={[name, "expiry_date"]} style={{ marginBottom: 0 }}>
+                                <DatePicker placeholder="Hạn SD" style={{ width: "100%", borderRadius: 8 }} size="middle" format="DD/MM/YYYY" />
+                              </Form.Item>
+                            </Col>
+
+                            <Col xs={8} md={2}>
+                              <Form.Item shouldUpdate={(prev, curr) => prev.type !== curr.type || prev.items?.[name]?.product_id !== curr.items?.[name]?.product_id} noStyle>
+                                {({ getFieldValue, setFieldsValue }) => {
+                                  const type = getFieldValue("type");
+                                  const items = getFieldValue("items") || [];
+                                  const item = items[name] || {};
+                                  const prodId = item.product_id;
+                                  let availableBatches = [];
+                                  
+                                  if ((type === "OUT" || type === "RETURN") && prodId) {
+                                      const p = products.find(x => String(getId(x) || x?._id) === String(prodId));
+                                      if (p && p.batches) availableBatches = p.batches.filter(b => b.quantity > 0);
+                                  }
+
+                                  if (availableBatches.length > 0) {
+                                     return (
+                                        <Form.Item {...restField} name={[name, "batch_no"]} style={{ marginBottom: 0 }}>
+                                            <Select 
+                                                placeholder="Chọn lô"
+                                                size="middle" 
+                                                style={{ borderRadius: 8 }}
+                                                allowClear
+                                                showSearch
+                                                onChange={(val) => {
+                                                    const b = availableBatches.find(x => x.batch_no === val);
+                                                    if (b) {
+                                                        const newItems = [...items];
+                                                        // Update expiry and cost from batch (for return/out logic)
+                                                        newItems[name] = {
+                                                            ...newItems[name],
+                                                            expiry_date: b.expiry_date ? dayjs(b.expiry_date) : null,
+                                                            unit_cost: b.cost_price,
+                                                            batch_no: val
+                                                        };
+                                                        setFieldsValue({ items: newItems });
+                                                    }
+                                                }}
+                                            >
+                                                {availableBatches.map((b, idxBatch) => (
+                                                    <Option key={`${b.batch_no}_${idxBatch}`} value={b.batch_no}>
+                                                        {b.batch_no} (SL: {b.quantity})
+                                                    </Option>
+                                                ))}
+                                            </Select>
+                                        </Form.Item>
+                                     );
+                                  }
+                                  return (
+                                     <Form.Item {...restField} name={[name, "batch_no"]} style={{ marginBottom: 0 }}>
+                                        <Input placeholder="Số lô" size="middle" style={{ borderRadius: 8 }} />
+                                     </Form.Item>
+                                  );
+                                }}
+                              </Form.Item>
+                            </Col>
+
+                            <Col xs={8} md={5}>
                               <Form.Item {...restField} name={[name, "note"]} style={{ marginBottom: 0 }}>
-                                <Input placeholder="Ghi chú..." size="large" style={{ borderRadius: 10 }} />
+                                <Input placeholder="Ghi chú..." size="middle" style={{ borderRadius: 8 }} />
                               </Form.Item>
                             </Col>
 
                             <Col xs={24} md={1} style={{ textAlign: "right" }}>
                               <Button
-                                size="middle"
+                                size="small"
                                 danger
                                 type="text"
-                                icon={<DeleteOutlined />}
+                                icon={<DeleteOutlined style={{ fontSize: 16 }} />}
                                 onClick={() => remove(name)}
-                                style={{ borderRadius: 8 }}
                               />
                             </Col>
 
-                            {/* Hidden fields */}
-                            <Form.Item {...restField} name={[name, "sku_snapshot"]} hidden>
-                              <Input />
-                            </Form.Item>
-                            <Form.Item {...restField} name={[name, "name_snapshot"]} hidden>
-                              <Input />
-                            </Form.Item>
-                            <Form.Item {...restField} name={[name, "unit_snapshot"]} hidden>
-                              <Input />
-                            </Form.Item>
+                            {/* Hidden fields for snapshot storage */}
+                            <Form.Item {...restField} name={[name, "sku_snapshot"]} hidden><Input /></Form.Item>
+                            <Form.Item {...restField} name={[name, "name_snapshot"]} hidden><Input /></Form.Item>
+                            <Form.Item {...restField} name={[name, "unit_snapshot"]} hidden><Input /></Form.Item>
                           </Row>
                         </div>
                       ))}
+
+                      {/* Summary Row */}
+                      <Form.Item shouldUpdate noStyle>
+                        {() => {
+                          const items = form.getFieldValue("items") || [];
+                          const totalQty = items.reduce((sum, it) => sum + (Number(it?.qty_actual) || 0), 0);
+                          const totalCost = items.reduce((sum, it) => sum + computeLineCost(it?.qty_actual, it?.unit_cost), 0);
+                          return (
+                            <div style={{ 
+                              padding: "16px 20px", 
+                              background: "linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)",
+                              borderTop: "2px solid #10b981",
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center"
+                            }}>
+                              <div style={{ display: "flex", gap: 24 }}>
+                                <div>
+                                  <Text type="secondary" style={{ fontSize: 12 }}>Tổng số lượng</Text>
+                                  <div style={{ fontWeight: 700, fontSize: 18, color: "#059669" }}>
+                                    {totalQty.toLocaleString("vi-VN")}
+                                  </div>
+                                </div>
+                                <div>
+                                  <Text type="secondary" style={{ fontSize: 12 }}>Số dòng hàng</Text>
+                                  <div style={{ fontWeight: 700, fontSize: 18, color: "#059669" }}>
+                                    {items.filter(x => x?.product_id).length}
+                                  </div>
+                                </div>
+                              </div>
+                              <div style={{ textAlign: "right" }}>
+                                <Text type="secondary" style={{ fontSize: 12 }}>Tổng tiền</Text>
+                                <div style={{ fontWeight: 700, fontSize: 22, color: "#059669" }}>
+                                  {formatCurrency(totalCost)} ₫
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        }}
+                      </Form.Item>
 
                       <div style={{ padding: "12px 20px", background: "#f8fafc" }}>
                         <Button
@@ -1841,10 +2158,21 @@ export default function InventoryVoucherPage() {
                           size="large"
                           type="dashed"
                           icon={<PlusOutlined />}
-                          onClick={() => add({ product_id: null, qty_actual: 1, unit_cost: 0, note: "" })}
-                          style={{ height: 48, borderRadius: 12, fontWeight: 600 }}
+                          onClick={() => add({ product_id: null, qty_actual: 1, unit_cost: 0, selling_price: 0, batch_no: "", expiry_date: null, note: "" })}
+                          style={{ height: 44, borderRadius: 10, fontWeight: 600 }}
                         >
                           Thêm dòng hàng hóa
+                        </Button>
+                        <Button
+                          size="large"
+                          type="primary" 
+                          ghost
+                          icon={<UploadOutlined />}
+                          onClick={() => { setRefVoucherModalOpen(true); fetchRefVouchers(); }}
+                          style={{ height: 44, borderRadius: 10, fontWeight: 600, marginTop: 8 }}
+                          block
+                        >
+                          Chọn từ phiếu nhập đã duyệt
                         </Button>
                       </div>
                     </>
@@ -1853,6 +2181,31 @@ export default function InventoryVoucherPage() {
               </Card>
             </div>
           </Form>
+        </Modal>
+
+        {/* Ref Voucher Modal */}
+        <Modal
+          title="Chọn phiếu nhập nguồn"
+          open={refVoucherModalOpen}
+          onCancel={() => setRefVoucherModalOpen(false)}
+          footer={null}
+          width={700}
+        >
+             <Table
+                dataSource={refVouchers}
+                loading={loadingRef}
+                rowKey="_id"
+                pagination={false}
+                size="small"
+                scroll={{ y: 300 }}
+                columns={[
+                    { title: "Mã phiếu", dataIndex: "voucher_code", key: "code" },
+                    { title: "Ngày", dataIndex: "voucher_date", key: "date", render: (d) => d ? dayjs(d).format("DD/MM/YYYY") : "" },
+                    { title: "Nhà cung cấp", dataIndex: "supplier_name_snapshot", key: "supplier" },
+                    { title: "Mặt hàng", key: "items", render: (_, r) => r.items?.length || 0 },
+                    { title: "", key: "action", render: (_, r) => <Button size="small" type="primary" onClick={() => handleSelectRefVoucher(r)}>Chọn</Button> }
+                ]}
+             />
         </Modal>
 
         {/* ===== DETAIL DRAWER ===== */}

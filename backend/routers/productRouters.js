@@ -15,12 +15,14 @@ const {
   createProduct,
   getProductsByStore,
   updateProductPrice,
+  updateProductBatch, // NEW
   searchProducts,
   updateProduct,
   deleteProduct,
   deleteProductImage,
   getProductById,
   getLowStockProducts,
+  getExpiringProducts,
   importProducts,
   downloadProductTemplate,
   exportProducts,
@@ -60,6 +62,19 @@ const handleMulterError = (err, req, res, next) => {
   }
   next();
 };
+
+/*
+  ROUTE: GET /api/products/expiring
+  - Lấy danh sách sản phẩm sắp hết hạn sử dụng
+  - Query params: storeId, days (số ngày tới khi hết hạn, mặc định 30)
+  - Middleware: verifyToken -> checkSubscriptionExpiry
+*/
+router.get(
+  "/expiring",
+  verifyToken,
+  checkSubscriptionExpiry,
+  getExpiringProducts
+);
 
 /*
   ROUTE: GET /api/products/template/download
@@ -146,7 +161,7 @@ router.get(
   verifyToken,
   checkSubscriptionExpiry,
   // checkStoreAccess,
-  requirePermission("products:get"),
+  requirePermission("products:view"),
   getProductsByStore
 );
 
@@ -163,6 +178,19 @@ router.put(
   // checkStoreAccess,
   requirePermission("products:price"),
   updateProductPrice
+);
+
+/*
+  ROUTE: PUT /api/products/:productId/batch
+  - Cập nhật thông tin lô hàng trong sản phẩm
+  - Middleware: verifyToken -> checkSubscriptionExpiry -> requirePermission("products:update")
+*/
+router.put(
+  "/:productId/batch",
+  verifyToken,
+  checkSubscriptionExpiry,
+  requirePermission("products:update"),
+  updateProductBatch
 );
 
 /*
@@ -209,6 +237,7 @@ router.delete(
   deleteProduct
 );
 
+
 /*
   ROUTE: GET /api/products/:productId
   - Lấy chi tiết sản phẩm theo ID
@@ -222,20 +251,6 @@ router.get(
   checkStoreAccess,
   requirePermission("products:view"),
   getProductById
-);
-
-/*
-  ROUTE: GET /api/products/store/:storeId/export
-  - Export danh sách sản phẩm ra Excel
-  - Middleware: verifyToken -> checkSubscriptionExpiry -> checkStoreAccess -> requirePermission("products:view")
-*/
-router.get(
-  "/store/:storeId/export",
-  verifyToken,
-  checkSubscriptionExpiry,
-  checkStoreAccess,
-  requirePermission("products:view"),
-  exportProducts // Cần implement hàm này trong controller
 );
 
 module.exports = router;

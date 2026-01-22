@@ -21,13 +21,24 @@ import {
   CheckCircleOutlined,
   RollbackOutlined,
   FileExcelOutlined,
+  PrinterOutlined,
 } from "@ant-design/icons";
+import ModalPrintBill from "./ModalPrintBill";
 import axios from "axios";
 import dayjs, { Dayjs } from "dayjs";
 import Swal from "sweetalert2";
 import debounce from "../../utils/debounce";
 import Layout from "../../components/Layout";
 import PendingOrdersManagerModal from "./PendingOrdersManagerModal";
+import utc from "dayjs/plugin/utc"; //  THÊM
+import timezone from "dayjs/plugin/timezone"; //  THÊM
+
+// Khởi tạo plugin
+dayjs.extend(utc); //  THÊM
+dayjs.extend(timezone); //  THÊM
+
+// Set timezone mặc định (optional)
+dayjs.tz.setDefault("Asia/Ho_Chi_Minh"); //  THÊM
 
 const { Option } = Select;
 const { Title, Text } = Typography;
@@ -61,6 +72,8 @@ interface Order {
   employeeId: Employee;
   customer?: Customer;
   totalAmount: MongoDecimal;
+  grossAmount?: MongoDecimal;
+  discountAmount?: MongoDecimal;
   status: "pending" | "paid" | "refunded" | "partially_refunded" | "cancelled";
   createdAt: string;
   paymentMethod: string;
@@ -78,6 +91,7 @@ interface OrderListResponse {
 // ========== Component ==========
 const ListAllOrder: React.FC = () => {
   const currentStore = JSON.parse(localStorage.getItem("currentStore") || "{}");
+  const currentUser = JSON.parse(localStorage.getItem("user") || "{}");
   const storeId = currentStore._id;
   const token = localStorage.getItem("token");
   const headers = { Authorization: `Bearer ${token}` };
@@ -92,7 +106,12 @@ const ListAllOrder: React.FC = () => {
     undefined
   );
   const [pagination, setPagination] = useState({ current: 1, pageSize: 10 });
+
   const [pendingModalVisible, setPendingModalVisible] = useState(false);
+  
+  // Print Modal State
+  const [printModalVisible, setPrintModalVisible] = useState(false);
+  const [printingOrder, setPrintingOrder] = useState<any>(null);
 
   // Period filter states
   const [periodType, setPeriodType] = useState<string>("month");
@@ -149,7 +168,12 @@ const ListAllOrder: React.FC = () => {
   const loadOrders = async () => {
     setLoading(true);
     try {
-      const params: any = { storeId, periodType, periodKey };
+      const params: any = {
+        storeId,
+        periodType,
+        periodKey,
+        timezone: "Asia/Ho_Chi_Minh",
+      };
 
       if (periodType === "custom") {
         params.monthFrom = monthFrom;
@@ -255,7 +279,12 @@ const ListAllOrder: React.FC = () => {
     }
 
     try {
-      const params: any = { storeId, periodType, periodKey };
+      const params: any = {
+        storeId,
+        periodType,
+        periodKey,
+        timezone: "Asia/Ho_Chi_Minh",
+      };
       if (periodType === "custom") {
         params.monthFrom = monthFrom;
         params.monthTo = monthTo;
@@ -281,6 +310,36 @@ const ListAllOrder: React.FC = () => {
     } catch (err) {
       Swal.fire("Lỗi!", "Không thể xuất Excel", "error");
     }
+  };
+
+  // --- LOGIC IN BILL ---
+  const handleOpenPrintModal = async (orderId: string) => {
+    try {
+      setLoading(true);
+      // Fetch full details (items)
+      const res = await axios.get(`${apiUrl}/orders/${orderId}`, { headers });
+      setPrintingOrder(res.data.order);
+      setPrintModalVisible(true);
+    } catch (err) {
+      Swal.fire("Lỗi", "Không thể tải chi tiết đơn hàng để in", "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePrintConfirm = async () => {
+    try {
+      if (printingOrder && printingOrder._id) {
+        await axios.post(
+          `${apiUrl}/orders/${printingOrder._id}/print-bill`,
+          {},
+          { headers }
+        );
+        // Refresh list to update printCount
+        loadOrders();
+      }
+    } catch (err) {}
+    setPrintModalVisible(false);
   };
 
   // Pagination config
@@ -386,13 +445,16 @@ const ListAllOrder: React.FC = () => {
 
                   {periodType === "day" && (
                     <DatePicker
-                      picker="date"
-                      format="DD-MM-YYYY"
+                      placeholder="Chọn ngày"
                       style={{ width: "100%" }}
-                      size="middle"
-                      placeholder="Chọn"
+                      size="large"
+                      format="DD/MM/YYYY"
                       onChange={(date) =>
-                        setPeriodKey(date ? date.format("YYYY-MM-DD") : "")
+                        setPeriodKey(
+                          date
+                            ? date.tz("Asia/Ho_Chi_Minh").format("YYYY-MM-DD")
+                            : "" //  THÊM .tz()
+                        )
                       }
                     />
                   )}
@@ -531,18 +593,22 @@ const ListAllOrder: React.FC = () => {
                   size="middle"
                   style={{ width: "100%" }}
                 >
-                  {["pending", "paid", "refunded", "partially_refunded"].map(
-                    (status) => {
-                      const cfg = getStatusConfig(status);
-                      return (
-                        <Option key={status} value={status}>
-                          <Tag color={cfg.color} icon={cfg.icon}>
-                            {cfg.text}
-                          </Tag>
-                        </Option>
-                      );
-                    }
-                  )}
+                  {[
+                    "pending",
+                    "paid",
+                    "refunded",
+                    "partially_refunded",
+                    "cancelled",
+                  ].map((status) => {
+                    const cfg = getStatusConfig(status);
+                    return (
+                      <Option key={status} value={status}>
+                        <Tag color={cfg.color} icon={cfg.icon}>
+                          {cfg.text}
+                        </Tag>
+                      </Option>
+                    );
+                  })}
                 </Select>
               </div>
             </Col>
@@ -746,7 +812,36 @@ const ListAllOrder: React.FC = () => {
                   ),
                 },
                 {
-                  title: <span style={{ fontWeight: 600 }}>Tổng Tiền</span>,
+                  title: <span style={{ fontWeight: 600 }}>Tiền Hàng</span>,
+                  dataIndex: "grossAmount",
+                  key: "grossAmount",
+                  align: "right",
+                  width: 70,
+                  render: (value) => (
+                    <Text style={{ fontSize: 14 }}>
+                      {value ? formatCurrency(value) : "---"}
+                    </Text>
+                  ),
+                },
+                {
+                  title: <span style={{ fontWeight: 600 }}>Giảm Giá</span>,
+                  dataIndex: "discountAmount",
+                  key: "discountAmount",
+                  align: "right",
+                  width: 70,
+                  render: (value) => (
+                    <Text
+                      style={{
+                        color: value ? "#52c41a" : "#ccc",
+                        fontSize: 14,
+                      }}
+                    >
+                      {value ? `-${formatCurrency(value)}` : "0₫"}
+                    </Text>
+                  ),
+                },
+                {
+                  title: <span style={{ fontWeight: 600 }}>Thực Thu</span>,
                   dataIndex: "totalAmount",
                   key: "totalAmount",
                   align: "right",
@@ -785,7 +880,80 @@ const ListAllOrder: React.FC = () => {
                     </Text>
                   ),
                 },
+                {
+                  title: <span style={{ fontWeight: 600 }}>Thao tác</span>,
+                  key: "action",
+                  width: 80,
+                  align: "center",
+                  fixed: "right",
+                  render: (_, record) => (
+                    <Button
+                      icon={<PrinterOutlined />}
+                      size="small"
+                      onClick={() => handleOpenPrintModal(record._id)}
+                    >
+                      In
+                    </Button>
+                  ),
+                },
               ]}
+            />
+          )}
+
+          {/* MODAL PRINT BILL */}
+          {printingOrder && (
+            <ModalPrintBill
+              open={printModalVisible}
+              onCancel={() => setPrintModalVisible(false)}
+              onPrint={handlePrintConfirm}
+              cart={(printingOrder.items || []).map((i: any) => ({
+                productId: i.productId,
+                name: i.product?.name || i.productName || "Sản phẩm",
+                quantity: i.quantity,
+                unit: i.product?.unit || "Cái",
+                subtotal: i.subtotal?.$numberDecimal || i.subtotal,
+                sku: i.product?.sku || "",
+                price: i.priceAtTime?.$numberDecimal || i.priceAtTime || 0,
+              }))}
+              totalAmount={
+                printingOrder.totalAmount?.$numberDecimal ||
+                printingOrder.totalAmount ||
+                0
+              }
+              // Store Info
+              storeName={currentStore.name}
+              address={currentStore.address || ""}
+              storePhone={currentStore.phone}
+              // Order Info
+              orderId={printingOrder._id}
+              createdAt={printingOrder.createdAt}
+              printCount={printingOrder.printCount} // printCount hiện tại (trước khi in lại)
+              customerName={printingOrder.customer?.name}
+              customerPhone={printingOrder.customer?.phone}
+              paymentMethod={printingOrder.paymentMethod}
+              isVAT={printingOrder.isVATInvoice}
+              vatAmount={
+                printingOrder.vatAmount?.$numberDecimal ||
+                printingOrder.vatAmount ||
+                0
+              }
+              subtotal={
+                printingOrder.beforeTaxAmount?.$numberDecimal ||
+                printingOrder.beforeTaxAmount ||
+                0
+              }
+              discount={
+                printingOrder.discountAmount?.$numberDecimal ||
+                printingOrder.discountAmount ||
+                0
+              }
+              employeeName={
+                printingOrder.employeeId?.fullName ||
+                printingOrder.employeeName ||
+                currentUser.fullname ||
+                "Chủ cửa hàng"
+              }
+              earnedPoints={0} // Có thể lấy nếu BE trả về
             />
           )}
         </Card>

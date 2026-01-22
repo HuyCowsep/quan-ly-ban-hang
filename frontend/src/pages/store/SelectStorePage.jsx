@@ -24,6 +24,7 @@ import {
   Dropdown,
   Menu,
   Divider,
+  Avatar,
 } from "antd";
 import {
   PlusOutlined,
@@ -43,10 +44,20 @@ import {
   UnorderedListOutlined,
   StarFilled,
   UndoOutlined,
+  PoweroffOutlined,
+  LogoutOutlined,
 } from "@ant-design/icons";
 import StoreFormModal from "../../components/store/StoreFormModal";
 import StoreDetailModal from "../../components/store/StoreDetailModal";
-import { selectStore, createStore, updateStore, deleteStore, getStoresByManager, getStoreById, restoreStore } from "../../api/storeApi";
+import {
+  selectStore,
+  createStore,
+  updateStore,
+  deleteStore,
+  getStoresByManager,
+  getStoreById,
+  restoreStore,
+} from "../../api/storeApi";
 
 const { Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
@@ -67,7 +78,9 @@ export default function SelectStorePage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(12);
   const [storeTab, setStoreTab] = useState("active"); // active | deleted
-  const [isMobile, setIsMobile] = useState(typeof window !== "undefined" ? window.innerWidth < 768 : false);
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== "undefined" ? window.innerWidth < 768 : false
+  );
 
   const [storeForm, setStoreForm] = useState({
     name: "",
@@ -80,7 +93,7 @@ export default function SelectStorePage() {
     location: { lat: null, lng: null },
   });
 
-  const { setCurrentStore, user } = useAuth();
+  const { setCurrentStore, user, logout } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -94,13 +107,20 @@ export default function SelectStorePage() {
     try {
       // Lấy cửa hàng active
       const activeRes = await getStoresByManager({ deleted: false });
-      const activeList = (activeRes && (activeRes.stores || activeRes.data || activeRes)) || [];
-      const activeArr = Array.isArray(activeList) ? activeList : activeList.stores || [];
+      const activeList =
+        (activeRes && (activeRes.stores || activeRes.data || activeRes)) || [];
+      const activeArr = Array.isArray(activeList)
+        ? activeList
+        : activeList.stores || [];
 
       // Lấy cửa hàng đã xoá
       const deletedRes = await getStoresByManager({ deleted: true });
-      const deletedList = (deletedRes && (deletedRes.stores || deletedRes.data || deletedRes)) || [];
-      const deletedArr = Array.isArray(deletedList) ? deletedList : deletedList.stores || [];
+      const deletedList =
+        (deletedRes && (deletedRes.stores || deletedRes.data || deletedRes)) ||
+        [];
+      const deletedArr = Array.isArray(deletedList)
+        ? deletedList
+        : deletedList.stores || [];
 
       setStores(activeArr);
       setDeletedStores(deletedArr);
@@ -108,8 +128,9 @@ export default function SelectStorePage() {
     } catch (e) {
       console.error(e);
       api.error({
-        message: "❌ Lỗi tải dữ liệu",
-        description: e?.response?.data?.message || "Không lấy được danh sách cửa hàng",
+        message: " Lỗi tải dữ liệu",
+        description:
+          e?.response?.data?.message || "Không lấy được danh sách cửa hàng",
         placement: "topRight",
       });
     } finally {
@@ -163,14 +184,25 @@ export default function SelectStorePage() {
         const name = (store.name || "").toLowerCase();
         const address = (store.address || "").toLowerCase();
         const phone = (store.phone || "").toLowerCase();
-        return name.includes(searchLower) || address.includes(searchLower) || phone.includes(searchLower);
+        return (
+          name.includes(searchLower) ||
+          address.includes(searchLower) ||
+          phone.includes(searchLower)
+        );
       })
       .slice(0, 8);
 
     return matches.map((store) => ({
       value: store.name,
       label: (
-        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "6px 0" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            padding: "6px 0",
+          }}
+        >
           <ShopOutlined style={{ color: "#52c41a", fontSize: 16 }} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 600, fontSize: 13 }}>{store.name}</div>
@@ -187,12 +219,23 @@ export default function SelectStorePage() {
       ),
     }));
   }, [search, stores]);
-
+  const handleLogout = () => {
+    logout();
+    api.success({
+      message: "Đăng xuất thành công!",
+      placement: "topRight",
+      duration: 2,
+    });
+    navigate("/login");
+  };
   const handleSelect = async (store) => {
     try {
       setBusy(true);
       const res = await selectStore(store._id);
-      let returnedStore = (res && (res.store || res.data?.store || res.data)) || (res && res._id ? res : null) || store;
+      let returnedStore =
+        (res && (res.store || res.data?.store || res.data)) ||
+        (res && res._id ? res : null) ||
+        store;
 
       try {
         const prev = localStorage.getItem("currentStore");
@@ -211,7 +254,7 @@ export default function SelectStorePage() {
       }
 
       api.success({
-        message: "✅ Chọn cửa hàng thành công!",
+        message: " Chọn cửa hàng thành công!",
         description: `Đã chọn "${store.name}"`,
         placement: "topRight",
         duration: 2,
@@ -221,7 +264,7 @@ export default function SelectStorePage() {
     } catch (e) {
       console.error(e);
       api.error({
-        message: "❌ Lỗi chọn cửa hàng",
+        message: " Lỗi chọn cửa hàng",
         description: e?.response?.data?.message || e?.message,
         placement: "topRight",
       });
@@ -253,7 +296,9 @@ export default function SelectStorePage() {
       phone: store.phone || "",
       description: store.description || "",
       imageUrl: store.imageUrl || "",
-      tagsCsv: Array.isArray(store.tags) ? store.tags.join(", ") : store.tags || "",
+      tagsCsv: Array.isArray(store.tags)
+        ? store.tags.join(", ")
+        : store.tags || "",
       openingHours: {
         open: store.openingHours?.open ?? "",
         close: store.openingHours?.close ?? "",
@@ -282,8 +327,14 @@ export default function SelectStorePage() {
         close: storeForm.openingHours?.close ?? "",
       },
       location: {
-        lat: storeForm.location?.lat != null ? Number(storeForm.location.lat) : null,
-        lng: storeForm.location?.lng != null ? Number(storeForm.location.lng) : null,
+        lat:
+          storeForm.location?.lat != null
+            ? Number(storeForm.location.lat)
+            : null,
+        lng:
+          storeForm.location?.lng != null
+            ? Number(storeForm.location.lng)
+            : null,
       },
     };
 
@@ -301,14 +352,14 @@ export default function SelectStorePage() {
       if (editingStore) {
         await updateStore(editingStore._id, final);
         api.success({
-          message: "✅ Cập nhật thành công!",
+          message: " Cập nhật thành công!",
           description: `Đã cập nhật "${final.name}"`,
           placement: "topRight",
         });
       } else {
         await createStore(final);
         api.success({
-          message: "✅ Tạo mới thành công!",
+          message: " Tạo mới thành công!",
           description: `Đã thêm "${final.name}"`,
           placement: "topRight",
         });
@@ -319,7 +370,7 @@ export default function SelectStorePage() {
     } catch (e) {
       console.error(e);
       api.error({
-        message: "❌ Lỗi lưu cửa hàng",
+        message: " Lỗi lưu cửa hàng",
         description: e?.response?.data?.message || "Không thể lưu cửa hàng",
         placement: "topRight",
       });
@@ -351,13 +402,13 @@ export default function SelectStorePage() {
       await deleteStore(storeId);
       setShowDetailModal(false);
       api.success({
-        message: "✅ Xóa thành công!",
+        message: " Xóa thành công!",
         placement: "topRight",
       });
       await loadStores();
     } catch (e) {
       api.error({
-        message: "❌ Lỗi xóa cửa hàng",
+        message: " Lỗi xóa cửa hàng",
         description: e?.response?.data?.message || "Không thể xóa cửa hàng",
         placement: "topRight",
       });
@@ -371,15 +422,16 @@ export default function SelectStorePage() {
       setBusy(true);
       await restoreStore(storeId);
       api.success({
-        message: "✅ Khôi phục cửa hàng thành công!",
+        message: " Khôi phục cửa hàng thành công!",
         placement: "topRight",
       });
       setShowDetailModal(false);
       await loadStores();
     } catch (e) {
       api.error({
-        message: "❌ Lỗi khôi phục cửa hàng",
-        description: e?.response?.data?.message || "Không thể khôi phục cửa hàng",
+        message: " Lỗi khôi phục cửa hàng",
+        description:
+          e?.response?.data?.message || "Không thể khôi phục cửa hàng",
         placement: "topRight",
       });
     } finally {
@@ -387,7 +439,10 @@ export default function SelectStorePage() {
     }
   };
 
-  const paginatedStores = filteredStores.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const paginatedStores = filteredStores.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize
+  );
 
   // Filter dropdown (demo)
   const filterMenu = (
@@ -399,8 +454,10 @@ export default function SelectStorePage() {
       ]}
       onClick={({ key }) => {
         if (key === "all") setFilteredStores(stores);
-        if (key === "hasPhone") setFilteredStores(stores.filter((s) => s.phone));
-        if (key === "hasAddress") setFilteredStores(stores.filter((s) => s.address));
+        if (key === "hasPhone")
+          setFilteredStores(stores.filter((s) => s.phone));
+        if (key === "hasAddress")
+          setFilteredStores(stores.filter((s) => s.address));
         setCurrentPage(1);
       }}
     />
@@ -449,10 +506,17 @@ export default function SelectStorePage() {
               }}
             />
 
-            <Row gutter={[24, 24]} align="middle" style={{ position: "relative", zIndex: 1 }}>
+            <Row
+              gutter={[24, 24]}
+              align="middle"
+              style={{ position: "relative", zIndex: 1 }}
+            >
               <Col xs={24} lg={14}>
-                <Space direction="vertical" size={12}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <Space direction="vertical" size={16} style={{ width: "100%" }}>
+                  {/* Title */}
+                  <div
+                    style={{ display: "flex", alignItems: "center", gap: 12 }}
+                  >
                     <div
                       style={{
                         width: 56,
@@ -468,15 +532,141 @@ export default function SelectStorePage() {
                       <ShopOutlined style={{ fontSize: 28, color: "#fff" }} />
                     </div>
                     <div>
-                      <Title level={2} style={{ color: "#fff", margin: 0, fontSize: isMobile ? 24 : 32 }}>
+                      <Title
+                        level={2}
+                        style={{
+                          color: "#fff",
+                          margin: 0,
+                          fontSize: isMobile ? 24 : 32,
+                        }}
+                      >
                         Cửa Hàng Của Bạn
                       </Title>
-                      <Text style={{ color: "rgba(255,255,255,0.95)", fontSize: 15 }}>Quản lý và điều hành cửa hàng một cách hiệu quả</Text>
+                      <Text
+                        style={{
+                          color: "rgba(255,255,255,0.95)",
+                          fontSize: 15,
+                        }}
+                      >
+                        Quản lý và điều hành cửa hàng một cách hiệu quả
+                      </Text>
                     </div>
                   </div>
+
+                  {/* 👇 USER PROFILE CARD VỚI LOGOUT */}
+                  {user && (
+                    <Card
+                      style={{
+                        background: "rgba(255, 255, 255, 0.15)",
+                        backdropFilter: "blur(15px)",
+                        border: "1px solid rgba(255, 255, 255, 0.25)",
+                        borderRadius: 16,
+                        boxShadow: "0 8px 32px rgba(0, 0, 0, 0.12)",
+                      }}
+                      bodyStyle={{ padding: isMobile ? 16 : 20 }}
+                    >
+                      <Row gutter={16} align="middle">
+                        <Col flex="none">
+                          <Badge dot status="success" offset={[-8, 48]}>
+                            <Avatar
+                              size={isMobile ? 48 : 56}
+                              src={user.image}
+                              icon={!user.image && <UserOutlined />}
+                              style={{
+                                background: user.image
+                                  ? "transparent"
+                                  : "linear-gradient(135deg, rgba(102, 126, 234, 0.8) 0%, rgba(118, 75, 162, 0.8) 100%)",
+                                border: "3px solid rgba(255, 255, 255, 0.5)",
+                                boxShadow: "0 4px 12px rgba(0, 0, 0, 0.15)",
+                              }}
+                            />
+                          </Badge>
+                        </Col>
+
+                        <Col flex="auto" style={{ minWidth: 0 }}>
+                          <div
+                            style={{
+                              color: "rgba(255,255,255,0.85)",
+                              fontSize: 12,
+                              marginBottom: 4,
+                            }}
+                          ></div>
+                          <div
+                            style={{
+                              color: "#fff",
+                              fontSize: isMobile ? 16 : 18,
+                              fontWeight: 700,
+                              letterSpacing: 0.3,
+                              textShadow: "0 2px 8px rgba(0, 0, 0, 0.15)",
+                            }}
+                          >
+                            {user.fullname ||
+                              user.username ||
+                              user.name ||
+                              "User"}
+                          </div>
+                          <Text
+                            style={{
+                              color: "rgba(255,255,255,0.75)",
+                              fontSize: 12,
+                            }}
+                          >
+                            {user.role === "MANAGER"
+                              ? "👨‍💼 Quản lý"
+                              : "👤 Nhân viên"}
+                          </Text>
+                        </Col>
+
+                        <Col flex="none">
+                          <Tooltip
+                            title="Đăng xuất khỏi hệ thống"
+                            placement="left"
+                          >
+                            <Button
+                              type="primary"
+                              danger
+                              icon={
+                                <PoweroffOutlined style={{ fontSize: 18 }} />
+                              }
+                              onClick={handleLogout}
+                              size="large"
+                              style={{
+                                height: isMobile ? 48 : 56,
+                                width: isMobile ? 48 : 56,
+                                borderRadius: 12,
+                                background:
+                                  "linear-gradient(135deg, #ff4d4f 0%, #ff7875 100%)",
+                                border: "none",
+                                boxShadow: "0 6px 20px rgba(255, 77, 79, 0.4)",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                padding: 0,
+                                transition:
+                                  "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+                              }}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.transform =
+                                  "translateY(-3px) scale(1.05)";
+                                e.currentTarget.style.boxShadow =
+                                  "0 10px 30px rgba(255, 77, 79, 0.6)";
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.transform =
+                                  "translateY(0) scale(1)";
+                                e.currentTarget.style.boxShadow =
+                                  "0 6px 20px rgba(255, 77, 79, 0.4)";
+                              }}
+                            />
+                          </Tooltip>
+                        </Col>
+                      </Row>
+                    </Card>
+                  )}
                 </Space>
               </Col>
 
+              {/* Statistics Cards */}
               <Col xs={24} lg={10}>
                 <Row gutter={[16, 16]}>
                   <Col xs={12}>
@@ -486,14 +676,29 @@ export default function SelectStorePage() {
                         backdropFilter: "blur(10px)",
                         border: "1px solid rgba(255, 255, 255, 0.2)",
                         borderRadius: 16,
+                        transition: "all 0.3s ease",
                       }}
                       bodyStyle={{ padding: 20 }}
+                      className="stat-card"
                     >
                       <Statistic
-                        title={<span style={{ color: "rgba(255,255,255,0.9)", fontSize: 13 }}>Tổng Cửa Hàng</span>}
+                        title={
+                          <span
+                            style={{
+                              color: "rgba(255,255,255,0.9)",
+                              fontSize: 13,
+                            }}
+                          >
+                            Tổng Cửa Hàng
+                          </span>
+                        }
                         value={stores.length}
                         prefix={<FireOutlined style={{ color: "#ffd666" }} />}
-                        valueStyle={{ color: "#fff", fontSize: 28, fontWeight: 700 }}
+                        valueStyle={{
+                          color: "#fff",
+                          fontSize: 28,
+                          fontWeight: 700,
+                        }}
                       />
                     </Card>
                   </Col>
@@ -504,14 +709,29 @@ export default function SelectStorePage() {
                         backdropFilter: "blur(10px)",
                         border: "1px solid rgba(255, 255, 255, 0.2)",
                         borderRadius: 16,
+                        transition: "all 0.3s ease",
                       }}
                       bodyStyle={{ padding: 20 }}
+                      className="stat-card"
                     >
                       <Statistic
-                        title={<span style={{ color: "rgba(255,255,255,0.9)", fontSize: 13 }}>Kết Quả Lọc</span>}
+                        title={
+                          <span
+                            style={{
+                              color: "rgba(255,255,255,0.9)",
+                              fontSize: 13,
+                            }}
+                          >
+                            Kết Quả Lọc
+                          </span>
+                        }
                         value={filteredStores.length}
                         prefix={<SearchOutlined style={{ color: "#95de64" }} />}
-                        valueStyle={{ color: "#fff", fontSize: 28, fontWeight: 700 }}
+                        valueStyle={{
+                          color: "#fff",
+                          fontSize: 28,
+                          fontWeight: 700,
+                        }}
                       />
                     </Card>
                   </Col>
@@ -531,7 +751,15 @@ export default function SelectStorePage() {
             bodyStyle={{ padding: isMobile ? "16px" : "24px" }}
           >
             {/* Tab Navigation */}
-            <div style={{ marginBottom: 20, display: "flex", gap: 8, borderBottom: "2px solid #f0f0f0", paddingBottom: 12 }}>
+            <div
+              style={{
+                marginBottom: 20,
+                display: "flex",
+                gap: 8,
+                borderBottom: "2px solid #f0f0f0",
+                paddingBottom: 12,
+              }}
+            >
               <Button
                 type={storeTab === "active" ? "primary" : "default"}
                 onClick={() => {
@@ -546,7 +774,10 @@ export default function SelectStorePage() {
                   paddingLeft: 16,
                   paddingRight: 16,
                   fontWeight: 600,
-                  background: storeTab === "active" ? "linear-gradient(135deg, #667eea 0%, #764ba2 100%)" : "#fff",
+                  background:
+                    storeTab === "active"
+                      ? "linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
+                      : "#fff",
                   border: storeTab === "active" ? "none" : "1px solid #d9d9d9",
                   color: storeTab === "active" ? "#fff" : "#262626",
                 }}
@@ -567,7 +798,10 @@ export default function SelectStorePage() {
                   paddingLeft: 16,
                   paddingRight: 16,
                   fontWeight: 600,
-                  background: storeTab === "deleted" ? "linear-gradient(135deg, #fa541c 0%, #ff7a45 100%)" : "#fff",
+                  background:
+                    storeTab === "deleted"
+                      ? "linear-gradient(135deg, #fa541c 0%, #ff7a45 100%)"
+                      : "#fff",
                   border: storeTab === "deleted" ? "none" : "1px solid #d9d9d9",
                   color: storeTab === "deleted" ? "#fff" : "#262626",
                 }}
@@ -600,7 +834,10 @@ export default function SelectStorePage() {
                       />
                     }
                     suffix={
-                      filteredStores.length !== (storeTab === "active" ? stores.length : deletedStores.length) && (
+                      filteredStores.length !==
+                        (storeTab === "active"
+                          ? stores.length
+                          : deletedStores.length) && (
                         <Badge
                           count={filteredStores.length}
                           style={{
@@ -697,7 +934,8 @@ export default function SelectStorePage() {
                     onClick={handleAdd}
                     size="large"
                     style={{
-                      background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                      background:
+                        "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
                       border: "none",
                       borderRadius: 12,
                       height: 48,
@@ -717,7 +955,18 @@ export default function SelectStorePage() {
           {/* Content Area */}
           {loading ? (
             <div style={{ textAlign: "center", padding: "100px 0" }}>
-              <Spin size="large" tip={<Text style={{ marginTop: 16, fontSize: 16, color: "#667eea" }}>Đang tải danh sách cửa hàng...</Text>} />
+              <Spin
+                size="large"
+                tip={
+                  <Text
+                    style={{ marginTop: 16, fontSize: 16, color: "#667eea" }}
+                  >
+                    Đang tải danh sách cửa hàng...
+                  </Text>
+                }
+              >
+                <div style={{ minHeight: 100 }} />
+              </Spin>
             </div>
           ) : filteredStores.length === 0 ? (
             <Card
@@ -731,11 +980,13 @@ export default function SelectStorePage() {
             >
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
-                imageStyle={{ height: 120 }}
+                styles={{ image: { height: 120 } }}
                 description={
                   <Space direction="vertical" size={16}>
                     <Title level={3} style={{ margin: 0, color: "#8c8c8c" }}>
-                      {search ? "🔍 Không Tìm Thấy Cửa Hàng" : "🏪 Chưa Có Cửa Hàng"}
+                      {search
+                        ? "🔍 Không Tìm Thấy Cửa Hàng"
+                        : "🏪 Chưa Có Cửa Hàng"}
                     </Title>
                     <Text type="secondary" style={{ fontSize: 15 }}>
                       {search
@@ -749,7 +1000,8 @@ export default function SelectStorePage() {
                       size="large"
                       style={{
                         marginTop: 8,
-                        background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                        background:
+                          "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
                         border: "none",
                         borderRadius: 12,
                         height: 48,
@@ -787,7 +1039,9 @@ export default function SelectStorePage() {
                       <div
                         style={{
                           height: 180,
-                          background: store.imageUrl ? `url(${store.imageUrl}) center/cover` : "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                          background: store.imageUrl
+                            ? `url(${store.imageUrl}) center/cover`
+                            : "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
                           position: "relative",
                         }}
                       >
@@ -822,7 +1076,8 @@ export default function SelectStorePage() {
                             left: 0,
                             right: 0,
                             height: 80,
-                            background: "linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 100%)",
+                            background:
+                              "linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 100%)",
                           }}
                         />
 
@@ -865,7 +1120,11 @@ export default function SelectStorePage() {
 
                       {/* Card Content */}
                       <div style={{ padding: 20 }}>
-                        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+                        <Space
+                          direction="vertical"
+                          size={12}
+                          style={{ width: "100%" }}
+                        >
                           {/* Store Name */}
                           <Title
                             level={5}
@@ -881,7 +1140,13 @@ export default function SelectStorePage() {
                           </Title>
 
                           {/* Address */}
-                          <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: 8,
+                              alignItems: "flex-start",
+                            }}
+                          >
                             <EnvironmentOutlined
                               style={{
                                 color: "#667eea",
@@ -890,22 +1155,43 @@ export default function SelectStorePage() {
                                 flexShrink: 0,
                               }}
                             />
-                            <Text ellipsis={{ rows: 2 }} type="secondary" style={{ fontSize: 13, lineHeight: "1.5" }}>
+                            <Text
+                              ellipsis={{ rows: 2 }}
+                              type="secondary"
+                              style={{ fontSize: 13, lineHeight: "1.5" }}
+                            >
                               {store.address || "Chưa có địa chỉ"}
                             </Text>
                           </div>
 
                           {/* Phone */}
                           {store.phone && (
-                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                              <PhoneOutlined style={{ color: "#52c41a", fontSize: 15 }} />
-                              <Text style={{ fontSize: 13, fontWeight: 500 }}>{store.phone}</Text>
+                            <div
+                              style={{
+                                display: "flex",
+                                gap: 8,
+                                alignItems: "center",
+                              }}
+                            >
+                              <PhoneOutlined
+                                style={{ color: "#52c41a", fontSize: 15 }}
+                              />
+                              <Text style={{ fontSize: 13, fontWeight: 500 }}>
+                                {store.phone}
+                              </Text>
                             </div>
                           )}
 
                           {/* Tags */}
                           {store.tags && store.tags.length > 0 && (
-                            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                            <div
+                              style={{
+                                display: "flex",
+                                flexWrap: "wrap",
+                                gap: 6,
+                                marginTop: 4,
+                              }}
+                            >
                               {store.tags.slice(0, 3).map((tag, idx) => (
                                 <Tag
                                   key={idx}
@@ -953,16 +1239,26 @@ export default function SelectStorePage() {
                                 disabled={store.deleted}
                                 block
                                 style={{
-                                  background: store.deleted ? "#ccc" : "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                                  background: store.deleted
+                                    ? "#ccc"
+                                    : "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
                                   border: "none",
                                   borderRadius: 10,
                                   fontWeight: 600,
                                   height: 40,
                                   fontSize: 13,
-                                  boxShadow: store.deleted ? "none" : "0 4px 12px rgba(102, 126, 234, 0.3)",
-                                  cursor: store.deleted ? "not-allowed" : "pointer",
+                                  boxShadow: store.deleted
+                                    ? "none"
+                                    : "0 4px 12px rgba(102, 126, 234, 0.3)",
+                                  cursor: store.deleted
+                                    ? "not-allowed"
+                                    : "pointer",
                                 }}
-                                title={store.deleted ? "Cửa hàng đã bị xóa, vui lòng khôi phục trước" : "Chọn cửa hàng này"}
+                                title={
+                                  store.deleted
+                                    ? "Cửa hàng đã bị xóa, vui lòng khôi phục trước"
+                                    : "Chọn cửa hàng này"
+                                }
                               >
                                 Chọn
                               </Button>
@@ -998,7 +1294,9 @@ export default function SelectStorePage() {
                                     borderRadius: 10,
                                     height: 40,
                                     border: "2px solid #f0f0f0",
-                                    cursor: store.deleted ? "not-allowed" : "pointer",
+                                    cursor: store.deleted
+                                      ? "not-allowed"
+                                      : "pointer",
                                   }}
                                 />
                               </Tooltip>
@@ -1051,7 +1349,10 @@ export default function SelectStorePage() {
                       alignItems: "center",
                       gap: 20,
                       padding: isMobile ? "16px" : "20px 24px",
-                      borderBottom: idx === paginatedStores.length - 1 ? "none" : "1px solid #f0f0f0",
+                      borderBottom:
+                        idx === paginatedStores.length - 1
+                          ? "none"
+                          : "1px solid #f0f0f0",
                       cursor: "pointer",
                       transition: "all 0.3s ease",
                       background: "#fff",
@@ -1065,7 +1366,9 @@ export default function SelectStorePage() {
                         width: 72,
                         height: 72,
                         borderRadius: 16,
-                        background: store.imageUrl ? `url(${store.imageUrl}) center/cover` : "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                        background: store.imageUrl
+                          ? `url(${store.imageUrl}) center/cover`
+                          : "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
                         position: "relative",
                         flexShrink: 0,
                         boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
@@ -1102,13 +1405,17 @@ export default function SelectStorePage() {
 
                       <Space size={16} wrap style={{ fontSize: 13 }}>
                         <Text type="secondary">
-                          <EnvironmentOutlined style={{ marginRight: 6, color: "#667eea" }} />
+                          <EnvironmentOutlined
+                            style={{ marginRight: 6, color: "#667eea" }}
+                          />
                           {store.address || "Chưa có địa chỉ"}
                         </Text>
 
                         {store.phone && (
                           <Text type="secondary">
-                            <PhoneOutlined style={{ marginRight: 6, color: "#52c41a" }} />
+                            <PhoneOutlined
+                              style={{ marginRight: 6, color: "#52c41a" }}
+                            />
                             {store.phone}
                           </Text>
                         )}
@@ -1162,17 +1469,25 @@ export default function SelectStorePage() {
                           loading={busy}
                           disabled={store.deleted}
                           style={{
-                            background: store.deleted ? "#ccc" : "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                            background: store.deleted
+                              ? "#ccc"
+                              : "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
                             border: "none",
                             borderRadius: 10,
                             fontWeight: 600,
                             height: 40,
                             paddingLeft: 20,
                             paddingRight: 20,
-                            boxShadow: store.deleted ? "none" : "0 4px 12px rgba(102, 126, 234, 0.3)",
+                            boxShadow: store.deleted
+                              ? "none"
+                              : "0 4px 12px rgba(102, 126, 234, 0.3)",
                             cursor: store.deleted ? "not-allowed" : "pointer",
                           }}
-                          title={store.deleted ? "Cửa hàng đã bị xóa, vui lòng khôi phục trước" : ""}
+                          title={
+                            store.deleted
+                              ? "Cửa hàng đã bị xóa, vui lòng khôi phục trước"
+                              : ""
+                          }
                         >
                           Chọn
                         </Button>
@@ -1255,7 +1570,7 @@ export default function SelectStorePage() {
       />
 
       {/* Custom Styles */}
-      <style jsx global>{`
+      <style>{`
         .store-card-modern:hover {
           transform: translateY(-8px);
           box-shadow: 0 12px 40px rgba(102, 126, 234, 0.25) !important;
@@ -1281,6 +1596,10 @@ export default function SelectStorePage() {
           background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
           color: #fff !important;
         }
+        .stat-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 40px rgba(255, 255, 255, 0.2) !important;
+  }
       `}</style>
     </Layout>
   );

@@ -62,7 +62,7 @@ export const getProfile = async () =>
  */
 export const updateProfile = async (data, options = {}) => {
   try {
-    // ✅ Case 1: Xóa ảnh
+    //  Case 1: Xóa ảnh
     if (options?.removeImage) {
       console.log("🗑️ Removing avatar via backend...");
 
@@ -71,11 +71,11 @@ export const updateProfile = async (data, options = {}) => {
         removeImage: true, // backend sẽ xoá avatar trên Cloudinary [file:313]
       });
 
-      console.log("✅ Avatar removed:", response.data);
+      console.log(" Avatar removed:", response.data);
       return response.data;
     }
 
-    // ✅ Case 2: Upload file avatar (FormData)
+    //  Case 2: Upload file avatar (FormData)
     if (options?.imageFile) {
       const formData = new FormData();
 
@@ -99,19 +99,19 @@ export const updateProfile = async (data, options = {}) => {
         timeout: 30000,
       });
 
-      console.log("✅ Profile updated with avatar:", response.data);
+      console.log(" Profile updated with avatar:", response.data);
       return response.data;
     }
 
-    // ✅ Case 3: Không có ảnh, chỉ update text fields
+    //  Case 3: Không có ảnh, chỉ update text fields
     console.log("📝 Updating profile text fields only...");
 
     const response = await apiClient.put("/users/profile", data);
 
-    console.log("✅ Profile updated:", response.data);
+    console.log(" Profile updated:", response.data);
     return response.data;
   } catch (error) {
-    console.error("❌ Update profile error:", error);
+    console.error(" Update profile error:", error);
     console.error("Error response:", error.response?.data);
     throw error;
   }

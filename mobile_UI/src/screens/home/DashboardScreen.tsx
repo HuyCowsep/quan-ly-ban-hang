@@ -1,5 +1,5 @@
 // src/screens/DashboardScreen.tsx
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, ReactNode } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
   NativeScrollEvent,
   NativeSyntheticEvent,
   Animated,
+  TextInput,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
 import apiClient from "../../api/apiClient";
@@ -19,8 +20,18 @@ import dayjs from "dayjs";
 import { LineChart, BarChart, PieChart } from "react-native-chart-kit";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { LinearGradient } from "expo-linear-gradient";
+import { Ionicons, MaterialIcons } from "@expo/vector-icons";
+import { useNavigation } from "@react-navigation/native";
+import NotificationPanel from "../../components/NotificationPanel";
 
 const { width } = Dimensions.get("window");
+
+const COLORS = {
+  primary: "#10b981",
+  muted: "#64748b",
+  placeholder: "#94a3b8",
+  white: "#ffffff",
+};
 
 // ==================== TYPES ====================
 interface Store {
@@ -56,6 +67,17 @@ interface TopProduct {
   category?: string;
 }
 
+interface ExpiringItem {
+  _id: string;
+  name: string;
+  sku: string;
+  unit: string;
+  batch_no: string;
+  expiry_date: string;
+  quantity: number;
+  status: "expired" | "expiring_soon";
+}
+
 type DecimalLike =
   | number
   | { $numberDecimal?: string }
@@ -82,7 +104,7 @@ const StatCard: React.FC<{
   title: string;
   value: string | number;
   subtitle: string;
-  icon: string;
+  icon: ReactNode | string;
   color: string;
   gradient: readonly [string, string];
   trend?: number;
@@ -126,7 +148,7 @@ const MetricProgress: React.FC<{
   value: number;
   target: number;
   color: string;
-  icon: string;
+  icon: string | ReactNode;
 }> = ({ label, value, target, color, icon }) => {
   const progress = Math.min((value / target) * 100, 100);
 
@@ -177,9 +199,14 @@ const getStoreId = (store: Store | null): string | null => {
 
 // ==================== MAIN COMPONENT ====================
 export default function DashboardScreen() {
+  const navigation = useNavigation<any>();
   const { user } = useAuth();
   const [currentStore, setCurrentStore] = useState<Store | null>(null);
   const [storeId, setStoreId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const [notificationPanelVisible, setNotificationPanelVisible] =
+    useState(false);
 
   const [orderStats, setOrderStats] = useState<OrderStats>({
     total: 0,
@@ -197,6 +224,8 @@ export default function DashboardScreen() {
   const [activeTab, setActiveTab] = useState<
     "overview" | "analytics" | "products"
   >("overview");
+  const [expiringItems, setExpiringItems] = useState<ExpiringItem[]>([]);
+  const [loadingExpiring, setLoadingExpiring] = useState<boolean>(false);
 
   // Animation values
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -223,7 +252,7 @@ export default function DashboardScreen() {
         setStoreId(getStoreId(store));
       }
     } catch (error) {
-      console.error("❌ Load store error:", error);
+      console.error(" Load store error:", error);
     }
   };
 
@@ -241,6 +270,7 @@ export default function DashboardScreen() {
         fetchTopProducts(),
         fetchRevenueChart(),
         fetchCategoryData(),
+        fetchExpiringItems(),
       ]);
 
       Animated.parallel([
@@ -256,12 +286,35 @@ export default function DashboardScreen() {
         }),
       ]).start();
     } catch (error) {
-      console.error("❌ Fetch data error:", error);
+      console.error(" Fetch data error:", error);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   };
+
+  const fetchUnreadNotifications = async (): Promise<void> => {
+    if (!storeId) return;
+    try {
+      const res: any = await apiClient.get(`/notifications`, {
+        params: { storeId, read: false, limit: 1 },
+      });
+      setUnreadNotifications(res?.data?.meta?.total || 0);
+    } catch (e) {
+      console.error(" Notifications error:", e);
+    }
+  };
+
+  useEffect(() => {
+    if (storeId) {
+      fetchUnreadNotifications();
+      // Poll every 5 seconds to update unread count in "real-time"
+      const interval = setInterval(fetchUnreadNotifications, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [storeId]);
+
+  // Check missed notifications logic moved to NotificationContext
 
   // ==================== FETCH ORDER STATS ====================
   const fetchOrderStats = async (): Promise<void> => {
@@ -295,7 +348,7 @@ export default function DashboardScreen() {
         totalRefundedItems,
       });
     } catch (error: any) {
-      console.error("❌ Order stats error:", error?.message || error);
+      console.error(" Order stats error:", error?.message || error);
     }
   };
 
@@ -314,7 +367,7 @@ export default function DashboardScreen() {
       const data = (res.data as { data: FinancialData })?.data;
       setFinancials(data || null);
     } catch (error: any) {
-      console.error("❌ Financials error:", error?.message || error);
+      console.error(" Financials error:", error?.message || error);
     }
   };
 
@@ -339,7 +392,7 @@ export default function DashboardScreen() {
       setTopProducts(data || []);
     } catch (error: any) {
       console.error(
-        "❌ Top products error:",
+        " Top products error:",
         error?.response?.status,
         error?.response?.data,
         error?.message
@@ -380,7 +433,7 @@ export default function DashboardScreen() {
 
       setRevenueData(fakeDaily);
     } catch (error: any) {
-      console.error("❌ Revenue chart error:", error?.message || error);
+      console.error(" Revenue chart error:", error?.message || error);
       setRevenueData([]);
     }
   };
@@ -426,6 +479,21 @@ export default function DashboardScreen() {
       },
     ];
     setCategoryData(mockCategoryData);
+  };
+
+  const fetchExpiringItems = async (): Promise<void> => {
+    if (!storeId) return;
+    setLoadingExpiring(true);
+    try {
+      const res = await apiClient.get("/products/expiring", {
+        params: { storeId, days: 30 },
+      });
+      setExpiringItems((res.data as any).data || []);
+    } catch (error) {
+      console.error(" Expiring items error:", error);
+    } finally {
+      setLoadingExpiring(false);
+    }
   };
 
   // ==================== REFRESH ====================
@@ -562,7 +630,10 @@ export default function DashboardScreen() {
       <LinearGradient colors={["#10b981", "#667eea"]} style={styles.header}>
         <View style={styles.headerContent}>
           <View style={styles.headerTop}>
-            <View style={styles.avatarContainer}>
+            <TouchableOpacity
+              style={styles.avatarContainer}
+              onPress={() => navigation.navigate("ProfileScreen")}
+            >
               <LinearGradient
                 colors={["#ffffff", "#f8fafc"]}
                 style={styles.avatar}
@@ -571,46 +642,88 @@ export default function DashboardScreen() {
                   {(user?.fullname || "M").charAt(0).toUpperCase()}
                 </Text>
               </LinearGradient>
-            </View>
+            </TouchableOpacity>
             <View style={styles.headerInfo}>
-              <Text style={styles.greeting}>
-                Xin chào, {user?.fullname || "Quản lý"}! 👋
-              </Text>
+              <View
+                style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
+              >
+                <Text style={styles.greeting}>
+                  Xin chào, {user?.fullname || "Quản lý"}!
+                </Text>
+                <MaterialIcons name="waving-hand" size={20} color="#f59e0b" />
+              </View>
               <Text style={styles.storeName}>
                 {currentStore?.name || "Cửa hàng"}
               </Text>
             </View>
-            <View style={styles.dateBadge}>
-              <Text style={styles.dateText}>
-                {dayjs().format("DD/MM/YYYY")}
-              </Text>
+            <View style={styles.headerButtons}>
+              <TouchableOpacity
+                style={styles.notifBtn}
+                onPress={() => setNotificationPanelVisible(true)}
+              >
+                <Ionicons name="notifications-outline" size={24} color="#fff" />
+                {unreadNotifications > 0 && (
+                  <View style={styles.notifBadge}>
+                    <Text style={styles.notifBadgeText}>
+                      {unreadNotifications > 99 ? "99+" : unreadNotifications}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+              <View style={styles.dateBadge}>
+                <Text style={styles.dateText}>
+                  {dayjs().format("DD/MM/YYYY")}
+                </Text>
+              </View>
             </View>
           </View>
-
           {/* Navigation Tabs */}
+
           <View style={styles.tabContainer}>
             {[
-              { id: "overview", label: "Tổng quan", icon: "📊" },
-              { id: "analytics", label: "Phân tích", icon: "📈" },
-              { id: "products", label: "Sản phẩm", icon: "📦" },
-            ].map((tab) => (
-              <TouchableOpacity
-                key={tab.id}
-                style={[styles.tab, activeTab === tab.id && styles.tabActive]}
-                onPress={() => setActiveTab(tab.id as any)}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.tabIcon}>{tab.icon}</Text>
-                <Text
-                  style={[
-                    styles.tabText,
-                    activeTab === tab.id && styles.tabTextActive,
-                  ]}
+              {
+                id: "overview",
+                label: "Tổng quan",
+                iconComponent: MaterialIcons,
+                iconName: "dashboard",
+              },
+              {
+                id: "analytics",
+                label: "Phân tích",
+                iconComponent: Ionicons,
+                iconName: "analytics",
+              },
+              {
+                id: "products",
+                label: "Sản phẩm",
+                iconComponent: MaterialIcons,
+                iconName: "inventory",
+              },
+            ].map((tab) => {
+              const IconComponent = tab.iconComponent;
+              return (
+                <TouchableOpacity
+                  key={tab.id}
+                  style={[styles.tab, activeTab === tab.id && styles.tabActive]}
+                  onPress={() => setActiveTab(tab.id as any)}
+                  activeOpacity={0.8}
                 >
-                  {tab.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
+                  <IconComponent
+                    name={tab.iconName as any}
+                    size={20}
+                    color={activeTab === tab.id ? "#2563eb" : "#9ca3af"}
+                  />
+                  <Text
+                    style={[
+                      styles.tabText,
+                      activeTab === tab.id && styles.tabTextActive,
+                    ]}
+                  >
+                    {tab.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
         </View>
       </LinearGradient>
@@ -645,109 +758,241 @@ export default function DashboardScreen() {
           {/* Overview Tab */}
           {activeTab === "overview" && (
             <>
+              {/* Expiry Alerts - Ẩn với role STAFF */}
+              {expiringItems.length > 0 &&
+                user?.role?.toUpperCase() !== "STAFF" && (
+                  <View style={styles.expiryAlertContainer}>
+                    <LinearGradient
+                      colors={
+                        expiringItems.some((i) => i.status === "expired")
+                          ? ["#fff1f0", "#ffccc7"]
+                          : ["#fffbe6", "#fff1b8"]
+                      }
+                      style={styles.expiryAlert}
+                    >
+                      <View style={styles.expiryAlertHeader}>
+                        <Ionicons
+                          name={
+                            expiringItems.some((i) => i.status === "expired")
+                              ? "alert-circle"
+                              : "warning"
+                          }
+                          size={20}
+                          color={
+                            expiringItems.some((i) => i.status === "expired")
+                              ? "#ff4d4f"
+                              : "#faad14"
+                          }
+                        />
+                        <Text
+                          style={[
+                            styles.expiryAlertTitle,
+                            {
+                              color: expiringItems.some(
+                                (i) => i.status === "expired"
+                              )
+                                ? "#a8071a"
+                                : "#874d00",
+                            },
+                          ]}
+                        >
+                          Cảnh báo:{" "}
+                          {expiringItems.some((i) => i.status === "expired")
+                            ? "Phát hiện hàng ĐÃ HẾT HẠN"
+                            : `${expiringItems.length} lô sắp hết hạn`}
+                        </Text>
+                        <TouchableOpacity onPress={() => setExpiringItems([])}>
+                          <Ionicons name="close" size={18} color="#999" />
+                        </TouchableOpacity>
+                      </View>
+                      <View style={styles.expiryList}>
+                        {expiringItems.slice(0, 3).map((item, idx) => {
+                          const isExp = item.status === "expired";
+                          return (
+                            <View key={idx} style={styles.expiryLine}>
+                              <Text
+                                style={[
+                                  styles.bullet,
+                                  { color: isExp ? "#ff4d4f" : "#faad14" },
+                                ]}
+                              >
+                                •
+                              </Text>
+                              <Text style={styles.expiryText} numberOfLines={1}>
+                                <Text
+                                  style={[
+                                    styles.boldText,
+                                    isExp && {
+                                      textDecorationLine: "line-through",
+                                      color: "#ff4d4f",
+                                    },
+                                  ]}
+                                >
+                                  {item.name}
+                                </Text>
+                                {` - Lô: ${item.batch_no} - `}
+                                <Text
+                                  style={{
+                                    color: isExp ? "#ff4d4f" : "#d46b08",
+                                    fontWeight: "bold",
+                                  }}
+                                >
+                                  {dayjs(item.expiry_date).format("DD/MM")}
+                                </Text>
+                                <Text
+                                  style={{
+                                    fontSize: 10,
+                                    color: isExp ? "#ff4d4f" : "#faad14",
+                                  }}
+                                >
+                                  {isExp ? " [HẾT HẠN]" : " [SẮP HẾT]"}
+                                </Text>
+                              </Text>
+                            </View>
+                          );
+                        })}
+                        {expiringItems.length > 3 && (
+                          <Text style={styles.moreText}>
+                            ... và {expiringItems.length - 3} lô hàng khác.
+                          </Text>
+                        )}
+                      </View>
+                      <TouchableOpacity
+                        style={[
+                          styles.manageBtn,
+                          {
+                            borderColor: expiringItems.some(
+                              (i) => i.status === "expired"
+                            )
+                              ? "#ff4d4f"
+                              : "#10b981",
+                          },
+                        ]}
+                        onPress={() => navigation.navigate("ProcessExpired")}
+                      >
+                        <Text
+                          style={[
+                            styles.manageBtnText,
+                            {
+                              color: expiringItems.some(
+                                (i) => i.status === "expired"
+                              )
+                                ? "#ff4d4f"
+                                : "#10b981",
+                            },
+                          ]}
+                        >
+                          {expiringItems.some((i) => i.status === "expired")
+                            ? "Xử lý hàng hết hạn ngay"
+                            : "Xem chi tiết kho"}
+                        </Text>
+                        <Ionicons
+                          name="chevron-forward"
+                          size={14}
+                          color={
+                            expiringItems.some((i) => i.status === "expired")
+                              ? "#ff4d4f"
+                              : "#10b981"
+                          }
+                        />
+                      </TouchableOpacity>
+                    </LinearGradient>
+                  </View>
+                )}
+
               {/* Key Metrics Grid */}
               <View style={styles.statsGrid}>
                 <StatCard
-                  title="Doanh thu tháng"
-                  value={formatCurrency(totalRevenueOfMonth)}
-                  subtitle="Tổng doanh thu tháng này"
-                  icon="💰"
+                  title="Doanh thu"
+                  value={formatCurrency(financials?.totalRevenue || 0)}
+                  subtitle="Tổng doanh thu chưa trừ chi phí gì"
+                  icon={
+                    <MaterialIcons
+                      name="attach-money"
+                      size={24}
+                      color="#10b981"
+                    />
+                  }
                   color="#10b981"
                   gradient={["#ecfdf5", "#d1fae5"]}
                   trend={12.5}
                 />
+
                 <StatCard
-                  title="Lợi nhuận"
-                  value={formatCurrency(financials?.netProfit || 0)}
-                  subtitle="Lợi nhuận thực sau chi phí"
-                  icon="📈"
-                  color="#f59e0b"
-                  gradient={["#fffbeb", "#fef3c7"]}
+                  title="Doanh thu thuần"
+                  value={formatCurrency(financials?.netSales || 0)}
+                  subtitle="Đây là doanh thu thực tế sau khi trừ VAT"
+                  icon={
+                    <MaterialIcons
+                      name="account-balance-wallet"
+                      size={24}
+                      color="#10b981"
+                    />
+                  }
+                  color="#10b981"
+                  gradient={["#ecfdf5", "#8cd88dff"]}
+                  trend={12.5}
+                />
+
+                <StatCard
+                  title="Lợi nhuận gộp"
+                  value={formatCurrency(financials?.grossProfit || 0)}
+                  subtitle="Doanh thu thuần - Giá vốn"
+                  icon={
+                    <MaterialIcons
+                      name="show-chart"
+                      size={24}
+                      color="#2563eb"
+                    />
+                  }
+                  color="#2563eb"
+                  gradient={["#eff6ff", "#dbeafe"]}
+                />
+
+                <StatCard
+                  title="Tổng đơn hàng"
+                  value={orderStats.total || 0}
+                  subtitle="Tổng đơn hàng"
+                  icon={
+                    <MaterialIcons
+                      name="shopping-cart"
+                      size={24}
+                      color="#2563eb"
+                    />
+                  }
+                  color="#2563eb"
+                  gradient={["#eff6ff", "#dbeafe"]}
                   trend={8.3}
                 />
+
                 <StatCard
-                  title="Đơn hàng"
-                  value={orderStats.paid}
-                  subtitle="Đơn đã thanh toán"
-                  icon="🛒"
-                  color="#3b82f6"
-                  gradient={["#eff6ff", "#dbeafe"]}
-                  trend={15.2}
-                />
-                <StatCard
-                  title="Tỷ lệ chuyển đổi"
-                  value={`${conversionRate.toFixed(1)}%`}
-                  subtitle="Tỷ lệ chốt đơn thành công"
-                  icon="🎯"
+                  title="Đơn chưa thanh toán"
+                  value={orderStats.pending || 0}
+                  subtitle="Cần xử lý"
+                  icon={
+                    <MaterialIcons
+                      name="pending-actions"
+                      size={24}
+                      color="#8b5cf6"
+                    />
+                  }
                   color="#8b5cf6"
                   gradient={["#faf5ff", "#e9d5ff"]}
-                  trend={5.7}
                 />
-              </View>
 
-              {/* Performance Metrics */}
-              <View style={[styles.metricsCard, styles.cardShadow]}>
-                <Text style={styles.sectionTitle}>📊 Chỉ số hiệu suất</Text>
-                <MetricProgress
-                  label="Mục tiêu doanh thu"
-                  value={totalRevenueOfMonth}
-                  target={50000000}
-                  color="#10b981"
-                  icon="🎯"
-                />
-                <MetricProgress
-                  label="Đơn hàng mục tiêu"
-                  value={orderStats.paid}
-                  target={200}
-                  color="#3b82f6"
-                  icon="📦"
-                />
-                <MetricProgress
-                  label="Khách hàng mới"
-                  value={45}
-                  target={100}
-                  color="#8b5cf6"
-                  icon="👥"
-                />
-              </View>
-
-              {/* Revenue Chart */}
-              <View style={[styles.chartCard, styles.cardShadow]}>
-                <View style={styles.chartHeader}>
-                  <Text style={styles.chartTitle}>
-                    📈 Doanh thu 7 ngày gần nhất
-                  </Text>
-                  <View style={styles.chartLegend}>
-                    <View
-                      style={[styles.legendDot, { backgroundColor: "#3b82f6" }]}
+                <StatCard
+                  title="Đơn bị hoàn trả"
+                  value={orderStats.refunded || 0}
+                  subtitle="Đơn bị hoàn trả"
+                  icon={
+                    <MaterialIcons
+                      name="assignment-return"
+                      size={24}
+                      color="#ef4444"
                     />
-                    <Text style={styles.legendText}>Doanh thu</Text>
-                  </View>
-                </View>
-                <BarChart
-                  data={dailyRevenueData}
-                  width={width - 48}
-                  height={220}
-                  chartConfig={{
-                    backgroundColor: "#ffffff",
-                    backgroundGradientFrom: "#ffffff",
-                    backgroundGradientTo: "#f8fafc",
-                    decimalPlaces: 0,
-                    color: (opacity = 1) => `rgba(59, 130, 246, ${opacity})`,
-                    labelColor: (opacity = 1) => `rgba(75, 85, 99, ${opacity})`,
-                    barPercentage: 0.7,
-                    propsForBackgroundLines: {
-                      strokeDasharray: "4 4",
-                      stroke: "#e5e7eb",
-                      strokeWidth: 1,
-                    },
-                  }}
-                  yAxisLabel=""
-                  yAxisSuffix=""
-                  style={styles.chart}
-                  showValuesOnTopOfBars
-                  withInnerLines
-                  fromZero
+                  }
+                  color="#ef4444"
+                  gradient={["#fef2f2", "#fecaca"]}
                 />
               </View>
             </>
@@ -757,10 +1002,20 @@ export default function DashboardScreen() {
           {activeTab === "analytics" && (
             <>
               <View style={[styles.chartCard, styles.cardShadow]}>
-                <Text style={styles.sectionTitle}>
-                  📊 Phân tích doanh thu theo tuần
+                <View style={styles.chartHeader}>
+                  <Text style={styles.sectionTitle}>
+                    � Phân tích doanh thu theo tuần
+                  </Text>
+                  <View style={styles.monthBadge}>
+                    <Text style={styles.monthBadgeText}>
+                      Tháng {monthLabel}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={styles.chartSubtitle}>
+                  Tổng doanh thu: {formatCurrency(totalRevenueOfMonth)}
                 </Text>
-                <LineChart
+                <BarChart
                   data={weeklyRevenueData}
                   width={width - 48}
                   height={220}
@@ -771,41 +1026,44 @@ export default function DashboardScreen() {
                     decimalPlaces: 0,
                     color: (opacity = 1) => `rgba(139, 92, 246, ${opacity})`,
                     labelColor: (opacity = 1) => `rgba(75, 85, 99, ${opacity})`,
-                    propsForDots: {
-                      r: "5",
-                      strokeWidth: "2",
-                      stroke: "#8b5cf6",
-                      fill: "#ffffff",
-                    },
+                    barPercentage: 0.6,
                     propsForBackgroundLines: {
                       strokeDasharray: "4 4",
                       stroke: "#e5e7eb",
                     },
                   }}
-                  bezier
                   style={styles.chart}
+                  showValuesOnTopOfBars
                   withInnerLines
-                  withOuterLines
-                  withVerticalLines
-                  withHorizontalLines
+                  fromZero
+                  yAxisLabel=""
+                  yAxisSuffix="đ"
                 />
-              </View>
-
-              <View style={styles.analyticsRow}>
-                <View style={[styles.pieChartCard, styles.cardShadow]}>
-                  <Text style={styles.sectionTitle}>🎨 Phân loại sản phẩm</Text>
-                  <PieChart
-                    data={categoryData}
-                    width={width - 48}
-                    height={200}
-                    chartConfig={{
-                      color: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
-                    }}
-                    accessor="value"
-                    backgroundColor="transparent"
-                    paddingLeft="15"
-                    absolute
-                  />
+                <View style={styles.weeklyLegend}>
+                  <View style={styles.weeklyLegendItem}>
+                    <View
+                      style={[styles.legendDot, { backgroundColor: "#8b5cf6" }]}
+                    />
+                    <Text style={styles.legendText}>Tuần 1: Ngày 1-7</Text>
+                  </View>
+                  <View style={styles.weeklyLegendItem}>
+                    <View
+                      style={[styles.legendDot, { backgroundColor: "#8b5cf6" }]}
+                    />
+                    <Text style={styles.legendText}>Tuần 2: Ngày 8-14</Text>
+                  </View>
+                  <View style={styles.weeklyLegendItem}>
+                    <View
+                      style={[styles.legendDot, { backgroundColor: "#8b5cf6" }]}
+                    />
+                    <Text style={styles.legendText}>Tuần 3: Ngày 15-21</Text>
+                  </View>
+                  <View style={styles.weeklyLegendItem}>
+                    <View
+                      style={[styles.legendDot, { backgroundColor: "#8b5cf6" }]}
+                    />
+                    <Text style={styles.legendText}>Tuần 4: Ngày 22+</Text>
+                  </View>
                 </View>
               </View>
             </>
@@ -859,7 +1117,7 @@ export default function DashboardScreen() {
                   ))
                 ) : (
                   <View style={styles.emptyState}>
-                    <Text style={styles.emptyIcon}>📦</Text>
+                    <Text style={styles.emptyIcon}></Text>
                     <Text style={styles.emptyText}>
                       Chưa có dữ liệu sản phẩm
                     </Text>
@@ -891,6 +1149,14 @@ export default function DashboardScreen() {
           </LinearGradient>
         </TouchableOpacity>
       )}
+
+      {/* Notification Panel */}
+      <NotificationPanel
+        storeId={storeId || undefined}
+        visible={notificationPanelVisible}
+        onClose={() => setNotificationPanelVisible(false)}
+        onUnreadCountChange={setUnreadNotifications}
+      />
     </View>
   );
 }
@@ -1171,4 +1437,131 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   scrollHintIcon: { color: "#ffffff", fontSize: 20, fontWeight: "800" },
+  headerButtons: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  notifBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 10,
+  },
+  notifBadge: {
+    position: "absolute",
+    top: 4,
+    right: 4,
+    backgroundColor: "#ef4444",
+    borderRadius: 10,
+    minWidth: 18,
+    height: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+    borderWidth: 2,
+    borderColor: "#10b981",
+  },
+  notifBadgeText: {
+    color: "#fff",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  searchContainer: {
+    paddingHorizontal: 0,
+    marginTop: 16,
+  },
+  searchBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.2)",
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    height: 48,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.3)",
+  },
+  searchInput: {
+    flex: 1,
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "600",
+    marginLeft: 10,
+  },
+  expiryAlertContainer: { marginBottom: 16 },
+  expiryAlert: {
+    padding: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#ffe58f",
+  },
+  expiryAlertHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 8,
+    gap: 8,
+  },
+  expiryAlertTitle: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#856404",
+  },
+  expiryList: { marginBottom: 10, paddingLeft: 4 },
+  expiryLine: { flexDirection: "row", marginBottom: 4, alignItems: "center" },
+  bullet: { marginRight: 6, color: "#faad14", fontSize: 16 },
+  expiryText: { flex: 1, fontSize: 12, color: "#595959", lineHeight: 18 },
+  boldText: { fontWeight: "700", color: "#262626" },
+  dangerText: { color: "#ef4444", fontWeight: "700" },
+  moreText: {
+    fontSize: 12,
+    fontStyle: "italic",
+    color: "#8c8c8c",
+    marginLeft: 14,
+  },
+  manageBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(16, 185, 129, 0.1)",
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    gap: 4,
+  },
+  manageBtnText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#10b981",
+  },
+  monthBadge: {
+    backgroundColor: "#8b5cf6",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  monthBadgeText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#fff",
+  },
+  chartSubtitle: {
+    fontSize: 14,
+    color: "#6b7280",
+    fontWeight: "600",
+    marginBottom: 12,
+  },
+  weeklyLegend: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginTop: 16,
+    gap: 12,
+  },
+  weeklyLegendItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
 });

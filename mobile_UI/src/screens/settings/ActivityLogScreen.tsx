@@ -569,6 +569,7 @@ const ActivityLogScreen: FC = () => {
     "delete",
     "restore",
     "auth",
+    "export",
     "other",
   ];
 
@@ -621,7 +622,7 @@ const ActivityLogScreen: FC = () => {
         isMountedRef.current
       ) {
         console.error(
-          "❌ Lỗi lấy thống kê:",
+          " Lỗi lấy thống kê:",
           error.response?.data?.message || error.message
         );
       }
@@ -665,7 +666,7 @@ const ActivityLogScreen: FC = () => {
         isMountedRef.current
       ) {
         console.error(
-          "❌ Lỗi lấy filter options:",
+          " Lỗi lấy filter options:",
           error.response?.data?.message || error.message
         );
       }
@@ -762,7 +763,7 @@ const ActivityLogScreen: FC = () => {
           isMountedRef.current
         ) {
           console.error(
-            "❌ Lỗi lấy logs:",
+            " Lỗi lấy logs:",
             error.response?.data?.message || error.message
           );
           if (!append) Alert.alert("Lỗi", "Không thể tải nhật ký hoạt động");
@@ -826,7 +827,7 @@ const ActivityLogScreen: FC = () => {
         isMountedRef.current
       ) {
         console.error(
-          "❌ Lỗi lấy điểm danh:",
+          " Lỗi lấy điểm danh:",
           error.response?.data?.message || error.message
         );
         Alert.alert("Lỗi", "Không thể tải dữ liệu điểm danh");
@@ -864,7 +865,7 @@ const ActivityLogScreen: FC = () => {
           isMountedRef.current
         ) {
           console.error(
-            "❌ Lỗi lấy chi tiết:",
+            " Lỗi lấy chi tiết:",
             error.response?.data?.message || error.message
           );
           Alert.alert("Lỗi", "Không thể tải chi tiết log");
@@ -905,6 +906,7 @@ const ActivityLogScreen: FC = () => {
       delete: "#ff4d4f",
       restore: "#722ed1",
       auth: "#fa8c16",
+      export: "#13c2c2",
       other: "#8c8c8c",
     };
     return colorMap[actionType] || "#8c8c8c";

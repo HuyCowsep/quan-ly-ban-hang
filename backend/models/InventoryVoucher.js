@@ -44,6 +44,12 @@ const InventoryVoucherItemSchema = new Schema(
       default: () => mongoose.Types.Decimal128.fromString("0"),
     },
 
+    // Giá bán (để tham chiếu khi nhập hàng)
+    selling_price: {
+      type: Schema.Types.Decimal128,
+      default: () => mongoose.Types.Decimal128.fromString("0"),
+    },
+
     note: { type: String, default: "" },
   },
   { _id: false }
@@ -102,7 +108,9 @@ const InventoryVoucherSchema = new Schema(
 
     // người giao / người nhận (phần chữ ký)
     deliverer_name: { type: String, default: "" },
+    deliverer_phone: { type: String, default: "" },
     receiver_name: { type: String, default: "" },
+    receiver_phone: { type: String, default: "" },
 
     // đối tác (cửa hàng nhỏ lẻ hay cần in ra)
     partner_name: { type: String, default: "" },

@@ -9,7 +9,7 @@ const {
   updateSupplier,
   deleteSupplier,
   exportSuppliersByStore,
-  restoreSupplier, // ✅ thêm
+  restoreSupplier, //  thêm
 } = require("../controllers/supplier/supplierController");
 
 const {
@@ -19,13 +19,17 @@ const {
   requirePermission,
 } = require("../middlewares/authMiddleware");
 
+const {
+  checkSubscriptionExpiry,
+} = require("../middlewares/subscriptionMiddleware");
+
 // Tạo nhà cung cấp mới cho cửa hàng
 router.post(
   "/stores/:storeId",
   verifyToken,
+  checkSubscriptionExpiry,
   checkStoreAccess,
-
-  requirePermission("supplier:create"),
+  requirePermission("suppliers:create"),
   createSupplier
 );
 
@@ -33,8 +37,9 @@ router.post(
 router.get(
   "/stores/:storeId",
   verifyToken,
+  checkSubscriptionExpiry,
   checkStoreAccess,
-  requirePermission("supplier:view"),
+  requirePermission("suppliers:view"),
   getSuppliersByStore
 );
 
@@ -42,17 +47,19 @@ router.get(
 router.get(
   "/stores/:storeId/export",
   verifyToken,
+  checkSubscriptionExpiry,
   checkStoreAccess,
-  requirePermission("supplier:export"),
+  requirePermission("suppliers:export"),
   exportSuppliersByStore
 );
 
-// ✅ Khôi phục nhà cung cấp đã bị xóa (soft delete restore)
+//  Khôi phục nhà cung cấp đã bị xóa (soft delete restore)
 // Lưu ý: đặt trước "/:supplierId" để không bị route param bắt nhầm. [web:52][web:53]
 router.put(
-  "/:id/restore",
+  "/:supplierId/restore",
   verifyToken,
-  requirePermission("supplier:restore"),
+  checkSubscriptionExpiry,
+  requirePermission("suppliers:restore"),
   restoreSupplier
 );
 
@@ -60,7 +67,8 @@ router.put(
 router.get(
   "/:supplierId",
   verifyToken,
-  requirePermission("supplier:view"),
+  checkSubscriptionExpiry,
+  requirePermission("suppliers:view"),
   getSupplierById
 );
 
@@ -68,8 +76,8 @@ router.get(
 router.put(
   "/:supplierId",
   verifyToken,
-
-  requirePermission("supplier:update"),
+  checkSubscriptionExpiry,
+  requirePermission("suppliers:update"),
   updateSupplier
 );
 
@@ -77,8 +85,8 @@ router.put(
 router.delete(
   "/:supplierId",
   verifyToken,
-
-  requirePermission("supplier:delete"),
+  checkSubscriptionExpiry,
+  requirePermission("suppliers:delete"),
   deleteSupplier
 );
 

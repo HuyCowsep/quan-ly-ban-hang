@@ -100,7 +100,7 @@ export default function Sidebar({ onCollapsedChange }) {
           {
             key: "/select-store",
             label: <span style={{ fontSize: 13.5 }}> Chọn cửa hàng khác</span>,
-            permission: "store:view",
+            permission: "store:create",
           },
           {
             key: "/update/store",
@@ -114,26 +114,26 @@ export default function Sidebar({ onCollapsedChange }) {
         label: "Quản lý kho",
         icon: <AppstoreOutlined style={{ fontSize: 18 }} />,
         children: [
-          { key: "/warehouses", label: <span style={{ fontSize: 13.5 }}>Kho hàng</span>, permission: "warehouses:view" },
+          { key: "/warehouses", label: <span style={{ fontSize: 13.5 }}>Kho hàng</span>, permission: "warehouses:create" },
           {
             key: "/inventory-vouchers",
             label: <span style={{ fontSize: 13.5 }}>Phiếu nhập/xuất kho</span>,
-            permission: "inventory:voucher:view",
+            permission: "inventory:voucher:create",
           },
           {
             key: "/products",
             label: <span style={{ fontSize: 13.5 }}>Danh sách hàng hóa</span>,
-            permission: "products:view",
+            permission: "products:create",
           },
           {
             key: "/suppliers",
             label: <span style={{ fontSize: 13.5 }}>Nhà cung cấp</span>,
-            permission: "supplier:view",
+            permission: "suppliers:create",
           },
           {
             key: "/product-groups",
             label: <span style={{ fontSize: 13.5 }}>Nhóm hàng hoá</span>,
-            permission: "products:view",
+            permission: "product-groups:create",
           },
         ],
       },
@@ -150,6 +150,11 @@ export default function Sidebar({ onCollapsedChange }) {
           {
             key: "/orders/list",
             label: <span style={{ fontSize: 13.5 }}> Danh sách đơn hàng</span>,
+            permission: "orders:view",
+          },
+          {
+            key: "/orders/reconciliation",
+            label: <span style={{ fontSize: 13.5 }}>Đối soát hóa đơn</span>,
             permission: "orders:view",
           },
         ],
@@ -179,7 +184,7 @@ export default function Sidebar({ onCollapsedChange }) {
           {
             key: `/stores/${storeId}/employees`,
             label: <span style={{ fontSize: 13.5 }}>Danh sách nhân viên</span>,
-            permission: "employees:view",
+            permission: "store:employee:create",
           },
         ],
       },
@@ -203,7 +208,7 @@ export default function Sidebar({ onCollapsedChange }) {
           {
             key: "/reports/dashboard",
             label: <span style={{ fontSize: 13.5 }}>Báo cáo tổng quan</span>,
-            permission: "reports:financial:view",
+            permission: "reports:revenue:view",
           },
           {
             key: "/reports/revenue",
@@ -217,8 +222,13 @@ export default function Sidebar({ onCollapsedChange }) {
           },
           {
             key: "/reports/top-products",
-            label: <span style={{ fontSize: 13.5 }}>Top sản phẩm bán chạy</span>,
+            label: <span style={{ fontSize: 13.5 }}>Báo cáo sản phẩm bán chạy</span>,
             permission: "reports:top-products",
+          },
+          {
+            key: "/reports/tax",
+            label: <span style={{ fontSize: 13.5 }}>Kê khai thuế</span>,
+            permission: "tax:preview",
           },
         ],
       },
@@ -257,27 +267,27 @@ export default function Sidebar({ onCollapsedChange }) {
           {
             key: "/settings/profile",
             label: <span style={{ fontSize: 13.5 }}>Hồ sơ cá nhân</span>,
-            permission: "users:view",
+            permission: null,
           },
           {
             key: "/settings/notification",
             label: <span style={{ fontSize: 13.5 }}>Thông báo</span>,
-            permission: "notifications:view",
+            permission: null,
           },
           {
             key: "/settings/export-data",
             label: <span style={{ fontSize: 13.5 }}>Xuất dữ liệu</span>,
-            permission: "data:export",
+            permission: "reports:financial:export",
           },
           {
             key: "/settings/file",
             label: <span style={{ fontSize: 13.5 }}>Quản lý file</span>,
-            permission: "file:view",
+            permission: "files:view",
           },
         ],
       },
     ],
-    [storeId]
+    [storeId],
   );
 
   const hasPermission = useCallback(
@@ -291,7 +301,7 @@ export default function Sidebar({ onCollapsedChange }) {
       if (menu.some((m) => m === `${resource}:*`)) return true;
       return false;
     },
-    [user]
+    [user],
   );
 
   const filterMenuItems = useCallback(
@@ -310,7 +320,7 @@ export default function Sidebar({ onCollapsedChange }) {
         })
         .filter(Boolean);
     },
-    [hasPermission, user?.role]
+    [hasPermission, user?.role],
   );
 
   const menuItems = useMemo(() => {
@@ -330,7 +340,7 @@ export default function Sidebar({ onCollapsedChange }) {
         allowedItems.push({
           ...settingsItem,
           children: settingsItem.children.filter((ch) =>
-            ["/settings/activity-log", "/settings/profile", "subscription", "/settings/export-data"].includes(ch.key)
+            ["/settings/activity-log", "/settings/profile", "subscription", "/settings/export-data"].includes(ch.key),
           ),
         });
       }
@@ -449,12 +459,8 @@ export default function Sidebar({ onCollapsedChange }) {
 
               {!collapsed && (
                 <div>
-                  <div style={{ color: "#fff", fontWeight: 800, fontSize: 17, lineHeight: 1.3, letterSpacing: 0.3 }}>
-                    Smallbiz Sales
-                  </div>
-                  <div style={{ color: "rgba(255,255,255,0.92)", fontSize: 12.5, fontWeight: 500, marginTop: 2 }}>
-                    Quản lý bán hàng
-                  </div>
+                  <div style={{ color: "#fff", fontWeight: 800, fontSize: 17, lineHeight: 1.3, letterSpacing: 0.3 }}>Smallbiz Sales</div>
+                  <div style={{ color: "rgba(255,255,255,0.92)", fontSize: 12.5, fontWeight: 500, marginTop: 2 }}>Quản lý bán hàng</div>
                 </div>
               )}
             </Space>
@@ -494,6 +500,7 @@ export default function Sidebar({ onCollapsedChange }) {
               <div style={{ color: "#fff", fontSize: 14, fontWeight: 700, letterSpacing: 0.2 }}>
                 {user.fullname || user.username || user.name || "User"}
               </div>
+              <div style={{ color: "#fff", fontSize: 14, opacity: 0.88 }}>{user.role === "MANAGER" ? "Quản lý" : "Nhân viên"}</div>
             </div>
           )}
 
@@ -716,7 +723,7 @@ export default function Sidebar({ onCollapsedChange }) {
         </div>
       </Drawer>
 
-      <style jsx global>{`
+      <style>{`
         @media (max-width: 768px) {
           .desktop-sidebar {
             display: none !important;

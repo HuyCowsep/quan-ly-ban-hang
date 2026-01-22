@@ -77,7 +77,7 @@ function runTests(selectedIndices) {
       }
     );
 
-    console.log("\n✅ Tests completed!");
+    console.log("\n Tests completed!");
     console.log("\n📊 Do you want to export to Google Sheets? (y/n)");
 
     rl.question("", (answer) => {
@@ -87,7 +87,7 @@ function runTests(selectedIndices) {
           encoding: "utf-8",
           stdio: "inherit",
         });
-        console.log("\n✅ Export completed!");
+        console.log("\n Export completed!");
       }
       rl.close();
     });
@@ -127,12 +127,12 @@ function main() {
     }
 
     if (selectedIndices.length === 0) {
-      console.log("❌ Invalid selection. Please try again.");
+      console.log(" Invalid selection. Please try again.");
       rl.close();
       return;
     }
 
-    console.log("\n📋 Selected tests:");
+    console.log("\n Selected tests:");
     selectedIndices.forEach((i) => {
       console.log(`  ✓ ${availableTests[i].name}`);
     });

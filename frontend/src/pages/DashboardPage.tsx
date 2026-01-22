@@ -2,8 +2,32 @@
 import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import Layout from "../components/Layout";
-import { Table, Space, Card, Typography, Progress, Collapse, Dropdown, Tooltip, Button, Spin, Alert, Input, Menu, Badge, Popover } from "antd";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer } from "recharts";
+import {
+  Table,
+  Space,
+  Card,
+  Typography,
+  Progress,
+  Collapse,
+  Dropdown,
+  Tooltip,
+  Button,
+  Spin,
+  Alert,
+  Input,
+  Menu,
+  Badge,
+  Popover,
+  Tag,
+} from "antd";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  ResponsiveContainer,
+} from "recharts";
 import { Tooltip as RechartsTooltip } from "recharts";
 import {
   EllipsisOutlined,
@@ -52,6 +76,7 @@ interface OrderStats {
 interface FinancialData {
   totalRevenue: number;
   totalVAT: number;
+  netSales: number; // Doanh thu thuần = Doanh thu - VAT
   totalCOGS: number;
   grossProfit: number;
   operatingCost: number;
@@ -118,9 +143,14 @@ export default function DashboardPage() {
   const [loadingTopProducts, setLoadingTopProducts] = useState(false);
   const [errorTopProducts, setErrorTopProducts] = useState<string | null>(null);
 
-  const [revenueSummary, setRevenueSummary] = useState<RevenueSummary | null>(null);
+  const [revenueSummary, setRevenueSummary] = useState<RevenueSummary | null>(
+    null
+  );
   const [loadingRevenue, setLoadingRevenue] = useState(false);
   const [errorRevenue, setErrorRevenue] = useState<string | null>(null);
+
+  const [expiringProducts, setExpiringProducts] = useState([]);
+  const [loadingExpiring, setLoadingExpiring] = useState(false);
 
   const [steps, setSteps] = useState<OnboardingStep[]>(() => {
     const saved = localStorage.getItem(`onboardingSteps_${storeId}`);
@@ -131,21 +161,24 @@ export default function DashboardPage() {
       {
         key: "setup-store",
         title: "Thiết lập cửa hàng",
-        description: "Cập nhật thông tin cửa hàng để giúp khách hàng và hệ thống SmartRetail liên hệ nhanh chóng hơn.",
+        description:
+          "Cập nhật thông tin cửa hàng để giúp khách hàng và hệ thống SmartRetail liên hệ nhanh chóng hơn.",
         completed: false,
         actions: [{ label: "Thiết lập cửa hàng", link: "/update/store" }],
       },
       {
         key: "add-product",
         title: "Thêm sản phẩm đầu tiên",
-        description: "Bạn kinh doanh sản phẩm gì? Hãy tạo nhóm sản phẩm, sau đó thêm sản phẩm đầu tiên để bắt đầu quản lý.",
+        description:
+          "Bạn kinh doanh sản phẩm gì? Hãy tạo nhóm sản phẩm, sau đó thêm sản phẩm đầu tiên để bắt đầu quản lý.",
         completed: false,
         actions: [{ label: "Tạo nhóm hàng hoá", link: "/product-groups" }],
       },
       {
         key: "connect-channel",
         title: "Kết nối kênh bán hàng",
-        description: "Kênh POS - Bán tại cửa hàng. Bán và vận hành cửa hàng chuyên nghiệp.",
+        description:
+          "Kênh POS - Bán tại cửa hàng. Bán và vận hành cửa hàng chuyên nghiệp.",
         completed: false,
         actions: [
           {
@@ -158,7 +191,8 @@ export default function DashboardPage() {
       {
         key: "manage-orders",
         title: "Quản lý đơn hàng tập trung",
-        description: "Các đơn hàng trên nhiều kênh bán khác nhau sẽ được quản lý tại một nơi duy nhất.",
+        description:
+          "Các đơn hàng trên nhiều kênh bán khác nhau sẽ được quản lý tại một nơi duy nhất.",
         completed: false,
         actions: [{ label: "Danh sách đơn hàng", link: "/orders/list" }],
       },
@@ -170,9 +204,12 @@ export default function DashboardPage() {
       if (!storeId) return;
       try {
         const token = localStorage.getItem("token");
-        const res = await axios.get(`${apiUrl}/notifications?storeId=${storeId}&read=false&limit=1`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await axios.get(
+          `${apiUrl}/notifications?storeId=${storeId}&read=false&limit=1`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
         setUnreadCount(res.data.meta.total || 0);
       } catch (err) {
         console.error("Lỗi tải số thông báo chưa đọc:", err);
@@ -193,7 +230,10 @@ export default function DashboardPage() {
     });
 
     return () => {
-      window.removeEventListener("notifications:updated", handleNotificationUpdate);
+      window.removeEventListener(
+        "notifications:updated",
+        handleNotificationUpdate
+      );
       socket.off("payment_success");
     };
   }, [storeId]);
@@ -219,7 +259,9 @@ export default function DashboardPage() {
       setTopProducts(res.data.data || []);
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
-        setErrorTopProducts(err.response?.data?.message || "Lỗi tải top sản phẩm");
+        setErrorTopProducts(
+          err.response?.data?.message || "Lỗi tải top sản phẩm"
+        );
       } else {
         setErrorTopProducts("Lỗi tải top sản phẩm");
       }
@@ -251,17 +293,22 @@ export default function DashboardPage() {
 
       const data = res.data.revenue || {};
 
-      const totalRevenue = typeof data.totalRevenue === "object" ? Number(data.totalRevenue.$numberDecimal || 0) : data.totalRevenue;
+      const totalRevenue =
+        typeof data.totalRevenue === "object"
+          ? Number(data.totalRevenue.$numberDecimal || 0)
+          : data.totalRevenue;
       const countOrders = data.countOrders || 0;
-      const completedOrders = data.completedOrders || 0; // ✅ THÊM KHAI BÁO
-      const partialRefundOrders = data.partialRefundOrders || 0; // ✅ THÊM KHAI BÁO
-      const dailyRevenue = Array.isArray(data.dailyRevenue) ? data.dailyRevenue : []; // ✅ THÊM KHAI BÁO
+      const completedOrders = data.completedOrders || 0; //  THÊM KHAI BÁO
+      const partialRefundOrders = data.partialRefundOrders || 0; //  THÊM KHAI BÁO
+      const dailyRevenue = Array.isArray(data.dailyRevenue)
+        ? data.dailyRevenue
+        : []; //  THÊM KHAI BÁO
 
       setRevenueSummary({
         totalRevenue,
         countOrders,
-        completedOrders, // ✅ THÊM VÀO ĐỂ HIỆN
-        partialRefundOrders, // ✅ THÊM VÀO ĐỂ HIỆN
+        completedOrders, //  THÊM VÀO ĐỂ HIỆN
+        partialRefundOrders, //  THÊM VÀO ĐỂ HIỆN
         dailyRevenue,
       });
     } catch (err: unknown) {
@@ -303,7 +350,15 @@ export default function DashboardPage() {
         headers: { Authorization: `Bearer ${token}` },
       })
       .then((res) => {
-        const { total, pending, refunded, paid, totalSoldItems, totalRefundedItems, netSoldItems } = res.data;
+        const {
+          total,
+          pending,
+          refunded,
+          paid,
+          totalSoldItems,
+          totalRefundedItems,
+          netSoldItems,
+        } = res.data;
         setOrderStats({
           total,
           pending,
@@ -345,7 +400,9 @@ export default function DashboardPage() {
         setFinancials(res.data.data);
       } catch (err: unknown) {
         if (axios.isAxiosError(err)) {
-          setErrorFinancials(err.response?.data?.message || "Lỗi tải báo cáo tài chính");
+          setErrorFinancials(
+            err.response?.data?.message || "Lỗi tải báo cáo tài chính"
+          );
         } else {
           setErrorFinancials("Lỗi tải báo cáo tài chính");
         }
@@ -357,7 +414,32 @@ export default function DashboardPage() {
     fetchFinancials();
   }, [storeId]);
 
-  const avgOrderValue = orderStats.paid > 0 && financials ? financials.totalRevenue / orderStats.paid : 0;
+  useEffect(() => {
+    const fetchExpiring = async () => {
+      if (!storeId) return;
+      setLoadingExpiring(true);
+      try {
+        const token = localStorage.getItem("token");
+        const res = await axios.get(
+          `${apiUrl}/products/expiring?storeId=${storeId}&days=30`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+        setExpiringProducts(res.data.data || []);
+      } catch (err) {
+        console.error("Lỗi tải sản phẩm sắp hết hạn:", err);
+      } finally {
+        setLoadingExpiring(false);
+      }
+    };
+    fetchExpiring();
+  }, [storeId]);
+
+  const avgOrderValue =
+    orderStats.paid > 0 && financials
+      ? financials.totalRevenue / orderStats.paid
+      : 0;
 
   const items = [
     {
@@ -398,7 +480,8 @@ export default function DashboardPage() {
       align: "right",
       render: (v: TopProduct["totalSales"]) => {
         if (!v) return "₫0";
-        const num = typeof v === "object" ? v.$numberDecimal || v.toString() : v;
+        const num =
+          typeof v === "object" ? v.$numberDecimal || v.toString() : v;
         return new Intl.NumberFormat("vi-VN", {
           style: "currency",
           currency: "VND",
@@ -412,133 +495,210 @@ export default function DashboardPage() {
 
   return (
     <Layout>
-      {/* Header Dashboard - RESPONSIVE */}
+      {/* Header Dashboard - MODERN & COMPACT */}
       <div
         className="dashboard-header"
         style={{
-          padding: "12px 16px",
+          padding: "16px 24px",
           borderBottom: "1px solid #f0f0f0",
-          background: "#fff",
+          background: "linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)",
           display: "flex",
-          justifyContent: "space-between",
+          justifyContent: "flex-end",
           alignItems: "center",
-          gap: 12,
-          flexWrap: "wrap",
+          gap: 16,
+          boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
         }}
       >
-        {/* Ô tìm kiếm - RESPONSIVE */}
-        <Input
-          placeholder="Tìm kiếm đơn hàng, sản phẩm, khách hàng..."
-          style={{ width: "100%", maxWidth: 600, minWidth: 200 }}
-          prefix={<SearchOutlined style={{ color: "#bfbfbf" }} />}
-          allowClear
-        />
-
-        {/* Nhóm 2 icon: Chuông + Hỏi chấm */}
+        {/* Nhóm icon: Chuông + Hỏi chấm + User */}
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           {/* Icon hỏi chấm - có dropdown */}
           <Dropdown
-            overlay={
-              <Menu style={{ width: "100%", maxWidth: 300, padding: "16px" }}>
-                <Menu.Item key="help" icon={<QuestionCircleOutlined />}>
-                  <Link to="/help" style={{ color: "inherit", textDecoration: "none" }}>
-                    Trung tâm trợ giúp
-                  </Link>
-                </Menu.Item>
-                <Menu.Item key="devices" icon={<LaptopOutlined />}>
-                  <Link to="/devices" style={{ color: "inherit", textDecoration: "none" }}>
-                    Thiết bị bán hàng
-                  </Link>
-                </Menu.Item>
-                <Menu.Item key="feedback" icon={<MessageOutlined />}>
-                  <Link to="/feedback" style={{ color: "inherit", textDecoration: "none" }}>
-                    Đóng góp ý kiến
-                  </Link>
-                </Menu.Item>
-                <Menu.Item key="newbie" icon={<BulbOutlined />}>
-                  Dành cho khách hàng mới: cùng SmartRetail làm quen phần mềm qua các bước đơn giản
-                  <div style={{ marginTop: 8 }}>
-                    <Link to="/product-groups" style={{ fontSize: 14, color: "#1890ff" }}>
-                      Tạo nhóm hàng hoá
+            menu={{
+              items: [
+                {
+                  key: "help",
+                  icon: <QuestionCircleOutlined />,
+                  label: (
+                    <Link
+                      to="/help"
+                      style={{ color: "inherit", textDecoration: "none" }}
+                    >
+                      Trung tâm trợ giúp
                     </Link>
-                  </div>
-                </Menu.Item>
-
-                <Menu.Divider />
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "8px 16px",
-                    background: "#f5f5f5",
-                    borderRadius: "4px",
-                    margin: "8px 0 0 0",
-                    flexWrap: "wrap",
-                    gap: 8,
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <PhoneOutlined style={{ color: "#52c41a", fontSize: 16 }} />
-                    <span style={{ fontWeight: 500 }}>1900 8386</span>
-                  </div>
-                  <Link
-                    to="/support"
-                    style={{
-                      color: "#1890ff",
-                      fontSize: 14,
-                      textDecoration: "none",
-                      transition: "all 0.2s",
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
-                    onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
-                  >
-                    <CustomerServiceOutlined style={{ marginRight: 4 }} /> Gửi hỗ trợ
-                  </Link>
-                </div>
-              </Menu>
-            }
+                  ),
+                },
+                {
+                  key: "devices",
+                  icon: <LaptopOutlined />,
+                  label: (
+                    <Link
+                      to="/devices"
+                      style={{ color: "inherit", textDecoration: "none" }}
+                    >
+                      Thiết bị bán hàng
+                    </Link>
+                  ),
+                },
+                {
+                  key: "feedback",
+                  icon: <MessageOutlined />,
+                  label: (
+                    <Link
+                      to="/feedback"
+                      style={{ color: "inherit", textDecoration: "none" }}
+                    >
+                      Đóng góp ý kiến
+                    </Link>
+                  ),
+                },
+                {
+                  key: "newbie",
+                  icon: <BulbOutlined />,
+                  label: (
+                    <>
+                      Dành cho khách hàng mới: cùng SmartRetail làm quen phần
+                      mềm qua các bước đơn giản
+                      <div style={{ marginTop: 8 }}>
+                        <Link
+                          to="/product-groups"
+                          style={{ fontSize: 14, color: "#1890ff" }}
+                        >
+                          Tạo nhóm hàng hoá
+                        </Link>
+                      </div>
+                    </>
+                  ),
+                },
+                {
+                  type: "divider",
+                },
+                {
+                  key: "support-info",
+                  label: (
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        padding: "8px 16px",
+                        background: "#f5f5f5",
+                        borderRadius: "4px",
+                        margin: "0",
+                        flexWrap: "wrap",
+                        gap: 8,
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                        }}
+                      >
+                        <PhoneOutlined
+                          style={{ color: "#52c41a", fontSize: 16 }}
+                        />
+                        <span style={{ fontWeight: 500 }}>1900 8386</span>
+                      </div>
+                      <Link
+                        to="/support"
+                        style={{
+                          color: "#1890ff",
+                          fontSize: 14,
+                          textDecoration: "none",
+                          transition: "all 0.2s",
+                        }}
+                      >
+                        <CustomerServiceOutlined style={{ marginRight: 4 }} />{" "}
+                        Gửi hỗ trợ
+                      </Link>
+                    </div>
+                  ),
+                },
+              ],
+              style: { width: "100%", maxWidth: 320, padding: "8px" },
+            }}
             trigger={["click"]}
             placement="bottomRight"
           >
-            <QuestionCircleOutlined style={{ fontSize: 20, color: "#8c8c8c", cursor: "pointer" }} />
+            <QuestionCircleOutlined
+              style={{ fontSize: 20, color: "#8c8c8c", cursor: "pointer" }}
+            />
           </Dropdown>
 
           {/* Icon chuông - Dropdown riêng */}
           <Badge count={unreadCount} overflowCount={99}>
-            <BellOutlined style={{ fontSize: 20, color: "#474646", cursor: "pointer" }} onClick={() => setPanelVisible(true)} />
+            <BellOutlined
+              style={{ fontSize: 20, color: "#474646", cursor: "pointer" }}
+              onClick={() => setPanelVisible(true)}
+            />
           </Badge>
-          <NotificationPanel storeId={storeId} visible={panelVisible} onClose={() => setPanelVisible(false)} />
+          <NotificationPanel
+            storeId={storeId}
+            visible={panelVisible}
+            onClose={() => setPanelVisible(false)}
+          />
 
           {/* Phần avata và dropdown - RESPONSIVE */}
           <Dropdown
             placement="bottomRight"
             trigger={["click"]}
-            overlay={
-              <Menu style={{ width: 220 }}>
-                <Menu.Item key="profile" icon={<UserOutlined />}>
-                  <Link to="/settings/profile" style={{ color: "inherit", textDecoration: "none" }}>
-                    Tài khoản của bạn
-                  </Link>
-                </Menu.Item>
-                <Menu.Item key="package" icon={<CreditCardOutlined />}>
-                  <Link to="/settings/subscription" style={{ color: "inherit", textDecoration: "none" }}>
-                    Thông tin gói dịch vụ
-                  </Link>
-                </Menu.Item>
-                <Menu.Divider />
-                <Menu.Item key="terms" icon={<FileTextOutlined />}>
-                  <Link to="/terms" style={{ color: "inherit", textDecoration: "none" }}>
-                    Điều khoản dịch vụ
-                  </Link>
-                </Menu.Item>
-                <Menu.Item key="privacy" icon={<LockOutlined />}>
-                  <Link to="/privacy" style={{ color: "inherit", textDecoration: "none" }}>
-                    Chính sách bảo mật
-                  </Link>
-                </Menu.Item>
-              </Menu>
-            }
+            menu={{
+              items: [
+                {
+                  key: "profile",
+                  icon: <UserOutlined />,
+                  label: (
+                    <Link
+                      to="/settings/profile"
+                      style={{ color: "inherit", textDecoration: "none" }}
+                    >
+                      Tài khoản của bạn
+                    </Link>
+                  ),
+                },
+                {
+                  key: "package",
+                  icon: <CreditCardOutlined />,
+                  label: (
+                    <Link
+                      to="/settings/subscription"
+                      style={{ color: "inherit", textDecoration: "none" }}
+                    >
+                      Thông tin gói dịch vụ
+                    </Link>
+                  ),
+                },
+                {
+                  type: "divider",
+                },
+                {
+                  key: "terms",
+                  icon: <FileTextOutlined />,
+                  label: (
+                    <Link
+                      to="/terms"
+                      style={{ color: "inherit", textDecoration: "none" }}
+                    >
+                      Điều khoản dịch vụ
+                    </Link>
+                  ),
+                },
+                {
+                  key: "privacy",
+                  icon: <LockOutlined />,
+                  label: (
+                    <Link
+                      to="/privacy"
+                      style={{ color: "inherit", textDecoration: "none" }}
+                    >
+                      Chính sách bảo mật
+                    </Link>
+                  ),
+                },
+              ],
+              style: { width: 220 },
+            }}
           >
             <div
               style={{
@@ -551,16 +711,24 @@ export default function DashboardPage() {
                 transition: "background 0.2s",
                 backgroundColor: "#f5f5f5",
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "#ecebebff")}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              onMouseEnter={(e) =>
+                (e.currentTarget.style.background = "#ecebebff")
+              }
+              onMouseLeave={(e) =>
+                (e.currentTarget.style.background = "transparent")
+              }
             >
               <img
-                src={user?.image || "https://cdn-icons-png.flaticon.com/512/9131/9131529.png"}
+                src={
+                  user?.image ||
+                  "https://cdn-icons-png.flaticon.com/512/9131/9131529.png"
+                }
                 alt="avatar"
                 onError={(e) => {
                   const target = e.currentTarget;
                   target.onerror = null; // tránh loop
-                  target.src = "https://cdn-icons-png.flaticon.com/512/9131/9131529.png";
+                  target.src =
+                    "https://cdn-icons-png.flaticon.com/512/9131/9131529.png";
                 }}
                 style={{
                   width: 40,
@@ -593,12 +761,13 @@ export default function DashboardPage() {
             Xin chào, {user?.fullname || user?.fullName || "Manager"} 👋
           </Title>
           <Text type="secondary" style={{ fontSize: "clamp(12px, 3vw, 14px)" }}>
-            Đang xem Dashboard của cửa hàng: <b>{currentStore?.name || storeId}</b>
+            Đang xem Dashboard của cửa hàng:{" "}
+            <b>{currentStore?.name || storeId}</b>
           </Text>
         </div>
 
         {/* Onboarding Card */}
-        {showOnboardingCard && (
+        {/* {showOnboardingCard && (
           <div style={{ marginBottom: 24 }}>
             <Card
               style={{ border: "1px solid #8c8c8c", borderRadius: 12 }}
@@ -705,6 +874,120 @@ export default function DashboardPage() {
               )}
             </Card>
           </div>
+        )} */}
+
+
+        {/* Expiry Alerts - Ẩn với role STAFF */}
+        {expiringProducts.length > 0 && user?.role?.toUpperCase() !== "STAFF" && (
+          <div style={{ marginBottom: 24 }}>
+            <Alert
+              message={
+                <Text strong style={{ fontSize: 16 }}>
+                  🔔 Cảnh báo kho hàng:{" "}
+                  {expiringProducts.some((p: any) => p.status === "expired")
+                    ? "Phát hiện lô hàng ĐÃ HẾT HẠN"
+                    : "Lô hàng sắp hết hạn"}
+                </Text>
+              }
+              description={
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ marginBottom: 12 }}>
+                    {expiringProducts.slice(0, 5).map((p: any, i: number) => {
+                      const isExp = p.status === "expired";
+                      return (
+                        <div
+                          key={i}
+                          style={{
+                            marginBottom: 6,
+                            padding: "4px 8px",
+                            borderRadius: 6,
+                            background: isExp ? "#fff1f0" : "transparent",
+                            borderLeft: `4px solid ${
+                              isExp ? "#ff4d4f" : "#faad14"
+                            }`,
+                          }}
+                        >
+                          <Badge status={isExp ? "error" : "warning"} />
+                          <Text strong={isExp} delete={isExp}>
+                            {" "}
+                            {p.name}{" "}
+                          </Text>
+                          <Text type="secondary" style={{ fontSize: 11 }}>
+                            (SKU: {p.sku})
+                          </Text>
+                          {" - Lô: "}
+                          <b>{p.batch_no}</b>
+                          {" - HSD: "}
+                          <Text
+                            style={{
+                              color: isExp ? "#f5222d" : "#d46b08",
+                              fontWeight: 600,
+                            }}
+                          >
+                            {dayjs(p.expiry_date).format("DD/MM/YYYY")}
+                          </Text>
+                          {isExp && (
+                            <Tag color="error" style={{ marginLeft: 8 }}>
+                              Đã hết hạn
+                            </Tag>
+                          )}
+                          {!isExp && (
+                            <Tag color="warning" style={{ marginLeft: 8 }}>
+                              Sắp hết hạn
+                            </Tag>
+                          )}
+                          <Text style={{ marginLeft: 8 }}>
+                            | SL: <b>{p.quantity}</b>
+                          </Text>
+                        </div>
+                      );
+                    })}
+                    {expiringProducts.length > 5 && (
+                      <div
+                        style={{
+                          fontStyle: "italic",
+                          marginLeft: 12,
+                          marginTop: 4,
+                        }}
+                      >
+                        ... và {expiringProducts.length - 5} lô hàng khác.
+                      </div>
+                    )}
+                  </div>
+                  <Space>
+                    <Button
+                      type="primary"
+                      size="small"
+                      onClick={() => navigate("/inventory/process-expired")}
+                      danger={expiringProducts.some(
+                        (p: any) => p.status === "expired"
+                      )}
+                    >
+                      Xử lý ngay
+                    </Button>
+                    <Button
+                      size="small"
+                      onClick={() => setExpiringProducts([])}
+                      type="text"
+                    >
+                      Để sau
+                    </Button>
+                  </Space>
+                </div>
+              }
+              type={
+                expiringProducts.some((p: any) => p.status === "expired")
+                  ? "error"
+                  : "warning"
+              }
+              showIcon
+              style={{
+                borderRadius: 12,
+                boxShadow: "0 4px 12px rgba(0,0,0,0.05)",
+                border: "1px solid #ffccc7",
+              }}
+            />
+          </div>
         )}
 
         {/* Kết quả kinh doanh - RESPONSIVE GRID */}
@@ -723,7 +1006,10 @@ export default function DashboardPage() {
                 <Text strong style={{ fontSize: "clamp(13px, 3vw, 15px)" }}>
                   Kết quả kinh doanh tháng {dayjs().format("MM/YYYY")}
                 </Text>
-                <Link to="/reports/dashboard" style={{ fontSize: "clamp(12px, 3vw, 14px)" }}>
+                <Link
+                  to="/reports/dashboard"
+                  style={{ fontSize: "clamp(12px, 3vw, 14px)" }}
+                >
                   Xem chi tiết
                 </Link>
               </Space>
@@ -731,35 +1017,38 @@ export default function DashboardPage() {
             style={{ border: "1px solid #8c8c8c", borderRadius: 12 }}
           >
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-4">
-              {/* Dòng 1 */}
-              <div className="p-4 bg-purple-50 rounded-lg flex items-center justify-between col-span-1 sm:col-span-1 lg:col-span-4">
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <Text type="secondary" style={{ fontSize: "clamp(11px, 2.5vw, 13px)" }}>
-                    Doanh thu
-                  </Text>
-                  <Title
-                    level={4}
-                    style={{
-                      margin: 0,
-                      color: "#1890ff",
-                      fontSize: "clamp(16px, 4vw, 20px)",
-                      wordBreak: "break-word",
-                    }}
-                  >
-                    {loadingFinancials ? (
-                      <Spin size="small" />
-                    ) : financials ? (
-                      new Intl.NumberFormat("vi-VN", {
-                        style: "currency",
-                        currency: "VND",
-                        minimumFractionDigits: 0,
-                      }).format(financials.totalRevenue)
-                    ) : (
-                      "₫0"
-                    )}
-                  </Title>
-                </div>
-                <Tooltip title="Tổng doanh thu cửa hàng bạn thu được từ bán hàng chưa trừ chi phí gì.">
+              {/* Dòng 1 - ô 1 */}
+              <Tooltip title="Tổng doanh thu cửa hàng bạn thu được từ bán hàng chưa trừ chi phí gì.">
+                <div className="p-4 bg-purple-50 rounded-lg flex items-center justify-between col-span-1 sm:col-span-1 lg:col-span-4 cursor-pointer">
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Text
+                      type="secondary"
+                      style={{ fontSize: "clamp(11px, 2.5vw, 13px)" }}
+                    >
+                      Doanh thu
+                    </Text>
+                    <Title
+                      level={4}
+                      style={{
+                        margin: 0,
+                        color: "#1890ff",
+                        fontSize: "clamp(16px, 4vw, 20px)",
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {loadingFinancials ? (
+                        <Spin size="small" />
+                      ) : financials ? (
+                        new Intl.NumberFormat("vi-VN", {
+                          style: "currency",
+                          currency: "VND",
+                          minimumFractionDigits: 0,
+                        }).format(financials.totalRevenue)
+                      ) : (
+                        "₫0"
+                      )}
+                    </Title>
+                  </div>
                   <InfoCircleOutlined
                     style={{
                       color: "#1890ff",
@@ -769,30 +1058,75 @@ export default function DashboardPage() {
                       flexShrink: 0,
                     }}
                   />
-                </Tooltip>
-              </div>
-
-              <div className="p-4 bg-purple-50 rounded-lg flex items-center justify-between col-span-1 sm:col-span-1 lg:col-span-4">
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <Text type="secondary" style={{ fontSize: "clamp(11px, 2.5vw, 13px)" }}>
-                    Giá trị trung bình / đơn
-                  </Text>
-                  <Title
-                    level={4}
-                    style={{
-                      margin: 0,
-                      color: "#52c41a",
-                      fontSize: "clamp(16px, 4vw, 20px)",
-                      wordBreak: "break-word",
-                    }}
-                  >
-                    {avgOrderValue.toLocaleString("vi-VN", {
-                      maximumFractionDigits: 0,
-                    })}{" "}
-                    ₫
-                  </Title>
                 </div>
-                <Tooltip title="Trung bình mỗi đơn khách chi trả, công thức: Doanh thu thuần / Số đơn đã bán">
+              </Tooltip>
+
+              {/* Doanh thu thuần */}
+              <Tooltip title="Doanh thu thuần = Doanh thu thực - VAT thu hộ. Đây là doanh thu thực tế sau khi trừ thuế.">
+                <div className="p-4 bg-indigo-50 rounded-lg flex items-center justify-between col-span-1 sm:col-span-1 lg:col-span-4 cursor-pointer">
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Text
+                      type="secondary"
+                      style={{ fontSize: "clamp(11px, 2.5vw, 13px)" }}
+                    >
+                      Doanh thu thuần
+                    </Text>
+                    <Title
+                      level={4}
+                      style={{
+                        margin: 0,
+                        color: "#6366f1",
+                        fontSize: "clamp(16px, 4vw, 20px)",
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {loadingFinancials ? (
+                        <Spin size="small" />
+                      ) : financials ? (
+                        new Intl.NumberFormat("vi-VN", {
+                          style: "currency",
+                          currency: "VND",
+                          minimumFractionDigits: 0,
+                        }).format(financials.netSales || 0)
+                      ) : (
+                        "₫0"
+                      )}
+                    </Title>
+                  </div>
+                  <InfoCircleOutlined
+                    style={{
+                      color: "#6366f1",
+                      fontSize: 16,
+                      cursor: "pointer",
+                      marginLeft: 8,
+                      flexShrink: 0,
+                    }}
+                  />
+                </div>
+              </Tooltip>
+
+              {/* Dòng 1 - ô 2 */}
+              {/* <Tooltip title="Trung bình mỗi đơn khách chi trả, công thức: Doanh thu thuần / Số đơn đã bán">
+                <div className="p-4 bg-purple-50 rounded-lg flex items-center justify-between col-span-1 sm:col-span-1 lg:col-span-4 cursor-pointer">
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Text type="secondary" style={{ fontSize: "clamp(11px, 2.5vw, 13px)" }}>
+                      Giá trị trung bình / đơn
+                    </Text>
+                    <Title
+                      level={4}
+                      style={{
+                        margin: 0,
+                        color: "#52c41a",
+                        fontSize: "clamp(16px, 4vw, 20px)",
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {avgOrderValue.toLocaleString("vi-VN", {
+                        maximumFractionDigits: 0,
+                      })}{" "}
+                      ₫
+                    </Title>
+                  </div>
                   <InfoCircleOutlined
                     style={{
                       color: "#1890ff",
@@ -802,102 +1136,44 @@ export default function DashboardPage() {
                       flexShrink: 0,
                     }}
                   />
-                </Tooltip>
-              </div>
-
-              <div className="p-4 bg-orange-50 rounded-lg flex items-center justify-between col-span-1 sm:col-span-1 lg:col-span-4">
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <Text type="secondary" style={{ fontSize: "clamp(11px, 2.5vw, 13px)" }}>
-                    Tổng đơn
-                  </Text>
-                  <Title
-                    level={4}
-                    style={{
-                      margin: 0,
-                      color: "#fa8c16",
-                      fontSize: "clamp(16px, 4vw, 20px)",
-                    }}
-                  >
-                    {orderStats.total}
-                  </Title>
                 </div>
-                <Tooltip title="Tổng số đơn hàng đã tạo, bao gồm cả đã thanh toán và chưa thanh toán.">
-                  <InfoCircleOutlined
-                    style={{
-                      color: "#fa8c16",
-                      fontSize: 16,
-                      cursor: "pointer",
-                      marginLeft: 8,
-                      flexShrink: 0,
-                    }}
-                  />
-                </Tooltip>
-              </div>
+              </Tooltip> */}
 
-              {/* Dòng 2 */}
-              <div className="p-4 bg-purple-50 rounded-lg flex items-center justify-between col-span-1 sm:col-span-1 lg:col-span-3">
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <Text type="secondary" style={{ fontSize: "clamp(11px, 2.5vw, 13px)" }}>
-                    Số lượng hàng thực bán
-                  </Text>
-                  <Title
-                    level={4}
-                    style={{
-                      margin: 0,
-                      color: "#722ed1",
-                      fontSize: "clamp(16px, 4vw, 20px)",
-                    }}
-                  >
-                    {orderStats.netSoldItems.toLocaleString("vi-VN")}
-                  </Title>
-                </div>
-                <Tooltip
-                  title={`Tổng số sản phẩm trên các đơn hàng, sau khi đã trừ đi các đơn bị hoàn trả.
-                    • Tổng bán: ${orderStats.totalSoldItems.toLocaleString("vi-VN")}
-                    • Hoàn: ${orderStats.totalRefundedItems.toLocaleString("vi-VN")}
-                    • Thực bán: ${orderStats.netSoldItems.toLocaleString("vi-VN")}
-                  `}
-                >
-                  <InfoCircleOutlined
-                    style={{
-                      color: "#1890ff",
-                      fontSize: 16,
-                      cursor: "pointer",
-                      marginLeft: 8,
-                      flexShrink: 0,
-                    }}
-                  />
-                </Tooltip>
-              </div>
-
-              <div className="p-4 bg-green-50 rounded-lg flex items-center justify-between col-span-1 sm:col-span-1 lg:col-span-4">
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <Text type="secondary" style={{ fontSize: "clamp(11px, 2.5vw, 13px)" }}>
-                    Tiền lãi thực
-                  </Text>
-                  <Title
-                    level={4}
-                    style={{
-                      margin: 0,
-                      color: (financials?.netProfit ?? 0) >= 0 ? "#389e0d" : "#f5222d",
-                      fontSize: "clamp(16px, 4vw, 20px)",
-                      wordBreak: "break-word",
-                    }}
-                  >
-                    {loadingFinancials ? (
-                      <Spin size="small" />
-                    ) : financials ? (
-                      new Intl.NumberFormat("vi-VN", {
-                        style: "currency",
-                        currency: "VND",
-                        minimumFractionDigits: 0,
-                      }).format(financials.netProfit)
-                    ) : (
-                      "₫0"
-                    )}
-                  </Title>
-                </div>
-                <Tooltip title="Số tiền lãi thực tế cửa hàng thu được, sau khi trừ tất cả chi phí vận hành, nguyên vật liệu, nhân công, thuế và các khoản khác.">
+              {/* Dòng 2 - ô 2 */}
+              <Tooltip title="Doanh thu thuần − Giá vốn hàng bán (COGS). Đây là số tiền còn lại sau khi trừ chi phí nguyên vật liệu, chưa bao gồm chi phí vận hành khác.">
+                <div className="p-4 bg-green-50 rounded-lg flex items-center justify-between col-span-1 sm:col-span-1 lg:col-span-4 cursor-pointer">
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Text
+                      type="secondary"
+                      style={{ fontSize: "clamp(11px, 2.5vw, 13px)" }}
+                    >
+                      Lợi nhuận gộp
+                    </Text>
+                    <Title
+                      level={4}
+                      style={{
+                        margin: 0,
+                        color:
+                          (financials?.grossProfit ?? 0) >= 0
+                            ? "#389e0d"
+                            : "#f5222d",
+                        fontSize: "clamp(16px, 4vw, 20px)",
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {loadingFinancials ? (
+                        <Spin size="small" />
+                      ) : financials ? (
+                        new Intl.NumberFormat("vi-VN", {
+                          style: "currency",
+                          currency: "VND",
+                          minimumFractionDigits: 0,
+                        }).format(financials.grossProfit)
+                      ) : (
+                        "₫0"
+                      )}
+                    </Title>
+                  </div>
                   <InfoCircleOutlined
                     style={{
                       color: "#389e0d",
@@ -907,26 +1183,112 @@ export default function DashboardPage() {
                       flexShrink: 0,
                     }}
                   />
-                </Tooltip>
-              </div>
-
-              <div className="p-4 bg-red-50 rounded-lg flex items-center justify-between col-span-1 sm:col-span-1 lg:col-span-3">
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <Text type="secondary" style={{ fontSize: "clamp(11px, 2.5vw, 13px)" }}>
-                    Chưa thanh toán
-                  </Text>
-                  <Title
-                    level={4}
-                    style={{
-                      margin: 0,
-                      color: "#f5222d",
-                      fontSize: "clamp(16px, 4vw, 20px)",
-                    }}
-                  >
-                    {orderStats.pending}
-                  </Title>
                 </div>
-                <Tooltip title="Số đơn hàng chưa được khách thanh toán.">
+              </Tooltip>
+
+              {/* Dòng 1 - ô 3 */}
+              <Tooltip title="Tổng số đơn hàng đã tạo, bao gồm cả đã thanh toán và chưa thanh toán.">
+                <div className="p-4 bg-orange-50 rounded-lg flex items-center justify-between col-span-1 sm:col-span-1 lg:col-span-4 cursor-pointer">
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Text
+                      type="secondary"
+                      style={{ fontSize: "clamp(11px, 2.5vw, 13px)" }}
+                    >
+                      Tổng tất cả các đơn hàng
+                    </Text>
+                    <Title
+                      level={4}
+                      style={{
+                        margin: 0,
+                        color: "#fa8c16",
+                        fontSize: "clamp(16px, 4vw, 20px)",
+                      }}
+                    >
+                      {orderStats.total}
+                    </Title>
+                  </div>
+                  <InfoCircleOutlined
+                    style={{
+                      color: "#fa8c16",
+                      fontSize: 16,
+                      cursor: "pointer",
+                      marginLeft: 8,
+                      flexShrink: 0,
+                    }}
+                  />
+                </div>
+              </Tooltip>
+
+              {/* Dòng 2 - ô 1 */}
+              <Tooltip
+                title={
+                  <>
+                    Tổng số sản phẩm trên các đơn hàng, sau khi đã trừ đi các
+                    đơn bị hoàn trả.
+                    <br />• Tổng đã bán:{" "}
+                    {orderStats.totalSoldItems.toLocaleString("vi-VN")}
+                    <br />• Hoàn lại:{" "}
+                    {orderStats.totalRefundedItems.toLocaleString("vi-VN")}
+                    <br />• Thực đã bán:{" "}
+                    {orderStats.netSoldItems.toLocaleString("vi-VN")}
+                  </>
+                }
+              >
+                {/*  span bọc ngoài nhưng ép block để không phá grid */}
+                <span className="block col-span-1 sm:col-span-1 lg:col-span-4">
+                  <div className="p-4 bg-purple-50 rounded-lg flex items-center justify-between cursor-pointer">
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <Text
+                        type="secondary"
+                        style={{ fontSize: "clamp(11px, 2.5vw, 13px)" }}
+                      >
+                        Số lượng hàng hóa thực bán
+                      </Text>
+                      <Title
+                        level={4}
+                        style={{
+                          margin: 0,
+                          color: "#722ed1",
+                          fontSize: "clamp(16px, 4vw, 20px)",
+                        }}
+                      >
+                        {orderStats.netSoldItems.toLocaleString("vi-VN")}
+                      </Title>
+                    </div>
+
+                    <InfoCircleOutlined
+                      style={{
+                        color: "#1890ff",
+                        fontSize: 16,
+                        marginLeft: 8,
+                        flexShrink: 0,
+                      }}
+                    />
+                  </div>
+                </span>
+              </Tooltip>
+
+              {/* Dòng 2 - ô 3 */}
+              <Tooltip title="Số đơn hàng chưa được khách thanh toán.">
+                <div className="p-4 bg-red-50 rounded-lg flex items-center justify-between col-span-1 sm:col-span-1 lg:col-span-4 cursor-pointer">
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Text
+                      type="secondary"
+                      style={{ fontSize: "clamp(11px, 2.5vw, 13px)" }}
+                    >
+                      Đơn hàng chưa thanh toán
+                    </Text>
+                    <Title
+                      level={4}
+                      style={{
+                        margin: 0,
+                        color: "#f5222d",
+                        fontSize: "clamp(16px, 4vw, 20px)",
+                      }}
+                    >
+                      {orderStats.pending}
+                    </Title>
+                  </div>
                   <InfoCircleOutlined
                     style={{
                       color: "#f5222d",
@@ -936,26 +1298,31 @@ export default function DashboardPage() {
                       flexShrink: 0,
                     }}
                   />
-                </Tooltip>
-              </div>
-
-              <div className="p-4 bg-gray-100 rounded-lg flex items-center justify-between col-span-1 sm:col-span-1 lg:col-span-2">
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <Text type="secondary" style={{ fontSize: "clamp(11px, 2.5vw, 13px)" }}>
-                    Đơn bị hoàn trả
-                  </Text>
-                  <Title
-                    level={4}
-                    style={{
-                      margin: 0,
-                      color: "#595959",
-                      fontSize: "clamp(16px, 4vw, 20px)",
-                    }}
-                  >
-                    {orderStats.refunded}
-                  </Title>
                 </div>
-                <Tooltip title="Số đơn hàng khách đã trả lại và hoàn tiền.">
+              </Tooltip>
+
+              {/* Dòng 2 - ô 4 */}
+              <Tooltip title="Số đơn hàng khách đã trả lại và hoàn tiền.">
+                <div className="p-4 bg-gray-100 rounded-lg flex items-center justify-between col-span-1 sm:col-span-1 lg:col-span-4 cursor-pointer">
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Text
+                      type="secondary"
+                      style={{ fontSize: "clamp(11px, 2.5vw, 13px)" }}
+                    >
+                      Đơn hàng bị hoàn trả
+                    </Text>
+                    <Title
+                      level={4}
+                      style={{
+                        margin: 0,
+                        color: "#595959",
+                        fontSize: "clamp(16px, 4vw, 20px)",
+                      }}
+                    >
+                      {orderStats.refunded}
+                    </Title>
+                  </div>
+
                   <InfoCircleOutlined
                     style={{
                       color: "#595959",
@@ -965,14 +1332,14 @@ export default function DashboardPage() {
                       flexShrink: 0,
                     }}
                   />
-                </Tooltip>
-              </div>
+                </div>
+              </Tooltip>
             </div>
           </Card>
         </div>
 
         {/* Biểu đồ doanh thu tổng quan - RESPONSIVE*/}
-        <div style={{ marginBottom: 24 }}>
+        {/* <div style={{ marginBottom: 24 }}>
           <Card
             title={
               <Space
@@ -1003,7 +1370,9 @@ export default function DashboardPage() {
                   justifyContent: "center",
                 }}
               >
-                <Spin tip="Đang tải..." />
+                <Spin tip="Đang tải...">
+                  <div style={{ minHeight: 60 }} />
+                </Spin>
               </div>
             ) : errorRevenue ? (
               <Alert type="error" message={errorRevenue} />
@@ -1087,7 +1456,7 @@ export default function DashboardPage() {
                         content={
                           <div style={{ fontSize: 12 }}>
                             <div>
-                              ✅ Đã hoàn thành: <b>{revenueSummary.completedOrders ?? "—"}</b>
+                               Đã hoàn thành: <b>{revenueSummary.completedOrders ?? "—"}</b>
                             </div>
                             <div>
                               ↩️ Hoàn 1 phần: <b>{revenueSummary.partialRefundOrders ?? "—"}</b>
@@ -1107,7 +1476,7 @@ export default function DashboardPage() {
               </Text>
             )}
           </Card>
-        </div>
+        </div>  */}
 
         {/* Top sản phẩm bán chạy - RESPONSIVE TABLE */}
         <div style={{ marginBottom: 24 }}>
@@ -1125,7 +1494,10 @@ export default function DashboardPage() {
                 <Text strong style={{ fontSize: "clamp(13px, 3vw, 15px)" }}>
                   Top 5 sản phẩm bán chạy tháng {dayjs().format("MM/YYYY")}
                 </Text>
-                <Link to="/reports/top-products" style={{ fontSize: "clamp(12px, 3vw, 14px)" }}>
+                <Link
+                  to="/reports/top-products"
+                  style={{ fontSize: "clamp(12px, 3vw, 14px)" }}
+                >
                   Xem chi tiết
                 </Link>
               </Space>
@@ -1141,16 +1513,28 @@ export default function DashboardPage() {
                   justifyContent: "center",
                 }}
               >
-                <Spin tip="Đang tải..." />
+                <Spin tip="Đang tải...">
+                  <div style={{ minHeight: 60 }} />
+                </Spin>
               </div>
             ) : errorTopProducts ? (
               <Alert type="error" message={errorTopProducts} />
             ) : topProducts.length > 0 ? (
               <div style={{ overflowX: "auto" }}>
-                <Table columns={columnsTopProducts} dataSource={topProducts} rowKey="_id" pagination={false} size="small" scroll={{ x: 600 }} />
+                <Table
+                  columns={columnsTopProducts}
+                  dataSource={topProducts}
+                  rowKey="_id"
+                  pagination={false}
+                  size="small"
+                  scroll={{ x: 600 }}
+                />
               </div>
             ) : (
-              <Text type="secondary" style={{ fontSize: "clamp(12px, 3vw, 14px)" }}>
+              <Text
+                type="secondary"
+                style={{ fontSize: "clamp(12px, 3vw, 14px)" }}
+              >
                 Chưa có dữ liệu sản phẩm bán chạy
               </Text>
             )}

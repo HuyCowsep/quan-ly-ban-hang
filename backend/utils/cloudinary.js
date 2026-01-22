@@ -45,7 +45,11 @@ const uploadProductImage = multer({
   },
 });
 
-const uploadToCloudinary = async (filePath, folder = "uploads", resource_type = "auto") => {
+const uploadToCloudinary = async (
+  filePath,
+  folder = "uploads",
+  resource_type = "auto"
+) => {
   try {
     if (!fs.existsSync(filePath)) {
       throw new Error(`File không tồn tại: ${filePath}`);
@@ -67,14 +71,17 @@ const uploadToCloudinary = async (filePath, folder = "uploads", resource_type = 
     console.log("📂 Folder đích:", folder);
 
     const uploadResult = await new Promise((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream({ folder, resource_type, public_id: baseName }, (error, result) => {
-        if (error) reject(error);
-        else resolve(result);
-      });
+      const stream = cloudinary.uploader.upload_stream(
+        { folder, resource_type, public_id: baseName },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result);
+        }
+      );
       fs.createReadStream(filePath).pipe(stream);
     });
 
-    // ✅ Xoá file local sau khi upload xong
+    //  Xoá file local sau khi upload xong
     try {
       fs.unlinkSync(filePath);
     } catch (err) {
@@ -90,7 +97,7 @@ const uploadToCloudinary = async (filePath, folder = "uploads", resource_type = 
 
     return uploadResult;
   } catch (err) {
-    console.error("❌ Upload Cloudinary fail:", err);
+    console.error(" Upload Cloudinary fail:", err);
     throw new Error("Lỗi upload Cloudinary");
   }
 };
@@ -104,12 +111,14 @@ const deleteFromCloudinary = async (public_id, resource_type = "raw") => {
     console.log("➡️ public_id:", public_id);
     console.log("➡️ resource_type:", resource_type);
 
-    const result = await cloudinary.uploader.destroy(public_id, { resource_type });
+    const result = await cloudinary.uploader.destroy(public_id, {
+      resource_type,
+    });
 
     console.log("🧩 Kết quả xoá Cloudinary:", result);
     return result;
   } catch (err) {
-    console.error("❌ Xóa Cloudinary thất bại:", err);
+    console.error(" Xóa Cloudinary thất bại:", err);
     throw err;
   }
 };

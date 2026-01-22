@@ -34,7 +34,12 @@ import Swal from "sweetalert2";
 const { TextArea } = Input;
 const { Panel } = Collapse;
 
-export default function ProductForm({ storeId, product = null, onSuccess, onCancel }) {
+export default function ProductForm({
+  storeId,
+  product = null,
+  onSuccess,
+  onCancel,
+}) {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
 
@@ -67,7 +72,7 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
         setWarehouses(warehousesData?.warehouses || []);
       } catch (err) {
         Swal.fire({
-          title: "❌ Lỗi!",
+          title: " Lỗi!",
           text: "Không thể tải dữ liệu",
           icon: "error",
           confirmButtonText: "OK",
@@ -80,47 +85,63 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
     if (storeId) fetchData();
   }, [storeId]);
 
-  // ✅ SUPPLIER OPTIONS
+  //  SUPPLIER OPTIONS
   const supplierOptions = useMemo(() => {
-    const base = (suppliers || []).map((s) => ({ value: s._id, label: s.name }));
-    const currentId = toId(product?.supplier_id || product?.supplier || product?.supplierid);
+    const base = (suppliers || []).map((s) => ({
+      value: s._id,
+      label: s.name,
+    }));
+    const currentId = toId(
+      product?.supplier_id || product?.supplier || product?.supplierid
+    );
 
     if (product && currentId) {
       const exists = base.some((o) => String(o.value) === String(currentId));
       if (!exists) {
-        const label = product?.supplier_id?.name || product?.supplier?.name || "Nhà cung cấp hiện tại";
+        const label =
+          product?.supplier_id?.name ||
+          product?.supplier?.name ||
+          "Nhà cung cấp hiện tại";
         base.unshift({ value: currentId, label });
       }
     }
     return base;
   }, [suppliers, product]);
 
-  // ✅ GROUP OPTIONS
+  //  GROUP OPTIONS
   const groupOptions = useMemo(() => {
     const base = (groups || []).map((g) => ({ value: g._id, label: g.name }));
-    const currentId = toId(product?.group_id || product?.group || product?.groupid);
+    const currentId = toId(
+      product?.group_id || product?.group || product?.groupid
+    );
 
     if (product && currentId) {
       const exists = base.some((o) => String(o.value) === String(currentId));
       if (!exists) {
-        const label = product?.group_id?.name || product?.group?.name || "Nhóm sản phẩm hiện tại";
+        const label =
+          product?.group_id?.name ||
+          product?.group?.name ||
+          "Nhóm sản phẩm hiện tại";
         base.unshift({ value: currentId, label });
       }
     }
     return base;
   }, [groups, product]);
 
-  // ✅ WAREHOUSE OPTIONS - SỬA ĐÚNG FIELD
+  //  WAREHOUSE OPTIONS - SỬA ĐÚNG FIELD
   const warehouseOptions = useMemo(() => {
-    const base = (warehouses || []).map((w) => ({ value: w._id, label: w.name }));
+    const base = (warehouses || []).map((w) => ({
+      value: w._id,
+      label: w.name,
+    }));
 
-    // ✅ Đọc đúng field từ backend (ưu tiên schema + alias)
+    //  Đọc đúng field từ backend (ưu tiên schema + alias)
     const currentId = toId(
       product?.default_warehouse_id ||
-      product?.warehouse_id ||
-      product?.default_warehouse?._id ||
-      product?.warehouse?._id ||
-      product?.warehouseId
+        product?.warehouse_id ||
+        product?.default_warehouse?._id ||
+        product?.warehouse?._id ||
+        product?.warehouseId
     );
 
     if (product && currentId) {
@@ -146,26 +167,31 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
 
       const defaultImage = hasImageUrl
         ? [
-          {
-            uid: "-1",
-            name: product.image.publicid || product.image.public_id || "image",
-            status: "done",
-            url: product.image.url,
-          },
-        ]
+            {
+              uid: "-1",
+              name:
+                product.image.publicid || product.image.public_id || "image",
+              status: "done",
+              url: product.image.url,
+            },
+          ]
         : [];
 
       setFileList(defaultImage);
 
-      // ✅ Lấy đúng id cho các select
-      const supplierValue = toId(product?.supplier_id || product?.supplier || product?.supplierid);
-      const groupValue = toId(product?.group_id || product?.group || product?.groupid);
+      //  Lấy đúng id cho các select
+      const supplierValue = toId(
+        product?.supplier_id || product?.supplier || product?.supplierid
+      );
+      const groupValue = toId(
+        product?.group_id || product?.group || product?.groupid
+      );
       const warehouseValue = toId(
         product?.default_warehouse_id ||
-        product?.warehouse_id ||
-        product?.default_warehouse?._id ||
-        product?.warehouse?._id ||
-        product?.warehouseId
+          product?.warehouse_id ||
+          product?.default_warehouse?._id ||
+          product?.warehouse?._id ||
+          product?.warehouseId
       );
 
       form.setFieldsValue({
@@ -179,10 +205,16 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
         unit: product.unit || undefined,
         status: product.status || "Đang kinh doanh",
 
-        // ✅ SỬA: dùng đúng field schema
+        //  SỬA: dùng đúng field schema
         supplier_id: supplierValue || undefined,
         group_id: groupValue || undefined,
-        default_warehouse_id: warehouseValue || undefined, // ✅ ĐÚNG
+        default_warehouse_id: warehouseValue || undefined, //  ĐÚNG
+
+        // Legal fields
+        tax_rate: product.tax_rate ?? 0,
+        origin: product.origin || "",
+        brand: product.brand || "",
+        warranty_period: product.warranty_period || "",
 
         image: defaultImage,
         description: product.description || "",
@@ -256,9 +288,18 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
     return e?.fileList || [];
   };
 
+  const isEditMode = !!product;
+
   return (
     <>
-      <Form form={form} layout="vertical" onFinish={handleSubmit} autoComplete="off" size="large">
+      <Form
+        form={form}
+        layout="vertical"
+        onFinish={handleSubmit}
+        autoComplete="off"
+        size="large"
+      >
+        {/* ===== PHẦN THÔNG TIN CƠ BẢN ===== */}
         <Card
           bordered={false}
           style={{
@@ -269,10 +310,21 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
         >
           <div style={{ marginBottom: "20px" }}>
             <Space>
-              <ShoppingOutlined style={{ color: "#1890ff", fontSize: "18px" }} />
-              <span style={{ fontWeight: 600, fontSize: "16px", color: "#262626" }}>
-                Thông tin bắt buộc
+              <ShoppingOutlined
+                style={{ color: "#1890ff", fontSize: "18px" }}
+              />
+              <span
+                style={{ fontWeight: 600, fontSize: "16px", color: "#262626" }}
+              >
+                {isEditMode ? "Thông tin sản phẩm" : "Thông tin bắt buộc"}
               </span>
+              {isEditMode && (
+                <span
+                  style={{ fontSize: 12, color: "#888", fontStyle: "italic" }}
+                >
+                  (Một số trường không thể chỉnh sửa)
+                </span>
+              )}
             </Space>
           </div>
 
@@ -281,16 +333,24 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
               <Form.Item
                 name="name"
                 label={<span style={{ fontWeight: 600 }}>Tên sản phẩm</span>}
-                rules={[
-                  { required: true, message: "Vui lòng nhập tên sản phẩm!" },
-                  { max: 200, message: "Tên không được quá 200 ký tự!" },
-                ]}
+                rules={
+                  !isEditMode
+                    ? [
+                        {
+                          required: true,
+                          message: "Vui lòng nhập tên sản phẩm!",
+                        },
+                        { max: 200, message: "Tên không được quá 200 ký tự!" },
+                      ]
+                    : []
+                }
               >
                 <Input
                   prefix={<ShoppingOutlined style={{ color: "#1890ff" }} />}
                   placeholder="Nhập tên sản phẩm"
-                  autoFocus
+                  autoFocus={!isEditMode}
                   style={{ borderRadius: "8px" }}
+                  disabled={isEditMode}
                 />
               </Form.Item>
             </Col>
@@ -299,17 +359,28 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
               <Form.Item
                 name="cost_price"
                 label={<span style={{ fontWeight: 600 }}>Giá vốn (₫)</span>}
-                rules={[
-                  { required: true, message: "Vui lòng nhập giá vốn!" },
-                  { type: "number", min: 0, message: "Giá vốn phải >= 0!" },
-                ]}
+                rules={
+                  !isEditMode
+                    ? [
+                        { required: true, message: "Vui lòng nhập giá vốn!" },
+                        {
+                          type: "number",
+                          min: 0,
+                          message: "Giá vốn phải >= 0!",
+                        },
+                      ]
+                    : []
+                }
               >
                 <InputNumber
                   prefix={<DollarOutlined style={{ color: "#52c41a" }} />}
                   placeholder="Nhập giá vốn"
                   style={{ width: "100%", borderRadius: "8px" }}
-                  formatter={(value) => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
+                  formatter={(value) =>
+                    `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+                  }
                   parser={(value) => value.replace(/\$\s?|(,*)/g, "")}
+                  disabled={isEditMode}
                 />
               </Form.Item>
             </Col>
@@ -318,17 +389,28 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
               <Form.Item
                 name="price"
                 label={<span style={{ fontWeight: 600 }}>Giá bán (₫)</span>}
-                rules={[
-                  { required: true, message: "Vui lòng nhập giá bán!" },
-                  { type: "number", min: 0, message: "Giá bán phải >= 0!" },
-                ]}
+                rules={
+                  !isEditMode
+                    ? [
+                        { required: true, message: "Vui lòng nhập giá bán!" },
+                        {
+                          type: "number",
+                          min: 0,
+                          message: "Giá bán phải >= 0!",
+                        },
+                      ]
+                    : []
+                }
               >
                 <InputNumber
                   prefix={<DollarOutlined style={{ color: "#faad14" }} />}
                   placeholder="Nhập giá bán"
                   style={{ width: "100%", borderRadius: "8px" }}
-                  formatter={(value) => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
+                  formatter={(value) =>
+                    `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+                  }
                   parser={(value) => value.replace(/\$\s?|(,*)/g, "")}
+                  disabled={isEditMode}
                 />
               </Form.Item>
             </Col>
@@ -336,26 +418,41 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
             <Col xs={24} md={12}>
               <Form.Item
                 name="stock_quantity"
-                label={<span style={{ fontWeight: 600 }}>Số lượng tồn kho</span>}
-                rules={[
-                  { required: true, message: "Vui lòng nhập số lượng!" },
-                  { type: "number", min: 0, message: "Số lượng phải >= 0!" },
-                ]}
+                label={
+                  <span style={{ fontWeight: 600 }}>Số lượng tồn kho</span>
+                }
+                rules={
+                  !isEditMode
+                    ? [
+                        { required: true, message: "Vui lòng nhập số lượng!" },
+                        {
+                          type: "number",
+                          min: 0,
+                          message: "Số lượng phải >= 0!",
+                        },
+                      ]
+                    : []
+                }
               >
                 <InputNumber
                   prefix={<StockOutlined style={{ color: "#722ed1" }} />}
                   placeholder="Nhập số lượng"
                   style={{ width: "100%", borderRadius: "8px" }}
+                  disabled={isEditMode}
                 />
               </Form.Item>
             </Col>
 
-            {/* ✅ KHO - SỬA NAME + FILL ĐÚNG */}
+            {/* KHO */}
             <Col xs={24} md={12}>
               <Form.Item
                 name="default_warehouse_id"
                 label={<span style={{ fontWeight: 600 }}>Kho mặc định</span>}
-                rules={[{ required: true, message: "Vui lòng chọn kho!" }]}
+                rules={
+                  !isEditMode
+                    ? [{ required: true, message: "Vui lòng chọn kho!" }]
+                    : []
+                }
               >
                 <Select
                   placeholder="-- Chọn kho mặc định --"
@@ -363,9 +460,12 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
                   showSearch
                   optionFilterProp="label"
                   filterOption={(input, option) =>
-                    (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+                    (option?.label ?? "")
+                      .toLowerCase()
+                      .includes(input.toLowerCase())
                   }
                   options={warehouseOptions}
+                  disabled={isEditMode}
                 />
               </Form.Item>
             </Col>
@@ -374,7 +474,16 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
               <Form.Item
                 name="supplier_id"
                 label={<span style={{ fontWeight: 600 }}>Nhà cung cấp</span>}
-                rules={[{ required: true, message: "Vui lòng chọn nhà cung cấp!" }]}
+                rules={
+                  !isEditMode
+                    ? [
+                        {
+                          required: true,
+                          message: "Vui lòng chọn nhà cung cấp!",
+                        },
+                      ]
+                    : []
+                }
               >
                 <Select
                   placeholder="-- Chọn nhà cung cấp --"
@@ -382,19 +491,27 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
                   showSearch
                   optionFilterProp="label"
                   filterOption={(input, option) =>
-                    (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+                    (option?.label ?? "")
+                      .toLowerCase()
+                      .includes(input.toLowerCase())
                   }
                   options={supplierOptions}
+                  disabled={isEditMode}
                 />
               </Form.Item>
             </Col>
           </Row>
         </Card>
 
+        {/* ===== PHẦN THÔNG TIN TÙY CHỌN / CÓ THỂ CHỈNH SỬA ===== */}
         <Collapse
           bordered={false}
+          defaultActiveKey={isEditMode ? ["1"] : []}
           expandIcon={({ isActive }) => (
-            <CaretRightOutlined rotate={isActive ? 90 : 0} style={{ fontSize: "16px", color: "#1890ff" }} />
+            <CaretRightOutlined
+              rotate={isActive ? 90 : 0}
+              style={{ fontSize: "16px", color: "#1890ff" }}
+            />
           )}
           style={{
             background: "#ffffff",
@@ -406,30 +523,56 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
           <Panel
             header={
               <Space>
-                <AppstoreOutlined style={{ color: "#1890ff", fontSize: "16px" }} />
-                <span style={{ fontWeight: 600, fontSize: "15px" }}>Thông tin tùy chọn</span>
+                <AppstoreOutlined
+                  style={{ color: "#1890ff", fontSize: "16px" }}
+                />
+                <span style={{ fontWeight: 600, fontSize: "15px" }}>
+                  {isEditMode
+                    ? "Thông tin có thể chỉnh sửa"
+                    : "Thông tin tùy chọn"}
+                </span>
               </Space>
             }
             key="1"
           >
             <Row gutter={16}>
+              {/* SKU - Disable khi edit */}
               <Col xs={24} md={12}>
-                <Form.Item name="sku" label={<span style={{ fontWeight: 600 }}>SKU</span>}>
-                  <Input placeholder="Mã SKU" style={{ borderRadius: "8px" }} />
+                <Form.Item
+                  name="sku"
+                  label={<span style={{ fontWeight: 600 }}>SKU</span>}
+                >
+                  <Input
+                    placeholder="Mã SKU"
+                    style={{ borderRadius: "8px" }}
+                    disabled={isEditMode}
+                  />
                 </Form.Item>
               </Col>
 
+              {/* Đơn vị tính - CHO PHÉP SỬA */}
               <Col xs={24} md={12}>
-                <Form.Item name="unit" label={<span style={{ fontWeight: 600 }}>Đơn vị tính</span>}>
-                  <Input placeholder="VD: cái, hộp, kg..." style={{ borderRadius: "8px" }} />
+                <Form.Item
+                  name="unit"
+                  label={<span style={{ fontWeight: 600 }}>Đơn vị tính</span>}
+                >
+                  <Input
+                    placeholder="VD: cái, hộp, kg..."
+                    style={{ borderRadius: "8px" }}
+                  />
                 </Form.Item>
               </Col>
 
+              {/* Nhóm sản phẩm - CHO PHÉP SỬA */}
               <Col xs={24} md={12}>
                 <Form.Item
                   name="group_id"
                   label={<span style={{ fontWeight: 600 }}>Nhóm sản phẩm</span>}
-                  rules={[{ required: true, message: "Vui lòng chọn nhóm!" }]}
+                  rules={
+                    !isEditMode
+                      ? [{ required: true, message: "Vui lòng chọn nhóm!" }]
+                      : []
+                  }
                 >
                   <Select
                     placeholder="-- Chọn nhóm sản phẩm --"
@@ -437,40 +580,136 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
                     showSearch
                     optionFilterProp="label"
                     filterOption={(input, option) =>
-                      (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+                      (option?.label ?? "")
+                        .toLowerCase()
+                        .includes(input.toLowerCase())
                     }
                     options={groupOptions}
                   />
                 </Form.Item>
               </Col>
 
+              {/* TRẠNG THÁI - CHO PHÉP SỬA */}
               <Col xs={24} md={12}>
-                <Form.Item name="status" label={<span style={{ fontWeight: 600 }}>Trạng thái</span>}>
+                <Form.Item
+                  name="status"
+                  label={<span style={{ fontWeight: 600 }}>Trạng thái</span>}
+                >
                   <Select
                     style={{ borderRadius: "8px" }}
                     options={[
-                      { value: "Đang kinh doanh", label: "✅ Đang kinh doanh" },
-                      { value: "Ngừng kinh doanh", label: "⛔ Ngừng kinh doanh" },
+                      { value: "Đang kinh doanh", label: "✔️ Đang kinh doanh" },
+                      {
+                        value: "Ngừng kinh doanh",
+                        label: "⛔ Ngừng kinh doanh",
+                      },
+                    ]}
+                  />
+                </Form.Item>
+              </Col>
+
+              {/* Tồn min/max - CHO PHÉP SỬA */}
+              <Col xs={24} md={12}>
+                <Form.Item
+                  name="min_stock"
+                  label={<span style={{ fontWeight: 600 }}>Tồn tối thiểu</span>}
+                >
+                  <InputNumber
+                    placeholder="Số lượng tối thiểu"
+                    style={{ width: "100%", borderRadius: "8px" }}
+                    min={0}
+                  />
+                </Form.Item>
+              </Col>
+
+              <Col xs={24} md={12}>
+                <Form.Item
+                  name="max_stock"
+                  label={<span style={{ fontWeight: 600 }}>Tồn tối đa</span>}
+                >
+                  <InputNumber
+                    placeholder="Số lượng tối đa"
+                    style={{ width: "100%", borderRadius: "8px" }}
+                    min={0}
+                  />
+                </Form.Item>
+              </Col>
+
+              {/* ===== THÔNG TIN PHÁP LÝ & BẢO HÀNH - HIỂN THỊ Ở CẢ 2 CHẾ ĐỘ ===== */}
+              <Divider
+                dashed
+                style={{ margin: "10px 0", borderColor: "#e8e8e8" }}
+                orientation="left"
+                plain
+              >
+                <span style={{ fontSize: 13, color: "#888" }}>
+                  Thông tin pháp lý & Bảo hành
+                </span>
+              </Divider>
+
+              <Col xs={24} md={12}>
+                <Form.Item
+                  name="tax_rate"
+                  label={<span style={{ fontWeight: 600 }}>Thuế GTGT (%)</span>}
+                  initialValue={0}
+                >
+                  <Select
+                    style={{ borderRadius: "8px" }}
+                    options={[
+                      { value: -1, label: "KCT (Không chịu thuế)" },
+                      { value: 0, label: "0% (Hoặc không kê khai)" },
+                      { value: 5, label: "5%" },
+                      { value: 8, label: "8%" },
+                      { value: 10, label: "10%" },
                     ]}
                   />
                 </Form.Item>
               </Col>
 
               <Col xs={24} md={12}>
-                <Form.Item name="min_stock" label={<span style={{ fontWeight: 600 }}>Tồn tối thiểu</span>}>
-                  <InputNumber placeholder="Số lượng tối thiểu" style={{ width: "100%", borderRadius: "8px" }} min={0} />
+                <Form.Item
+                  name="origin"
+                  label={
+                    <span style={{ fontWeight: 600 }}>Xuất xứ (Quốc gia sản xuất)</span>
+                  }
+                >
+                  <Input
+                    placeholder="VD: Việt Nam, Trung Quốc, Nhật Bản..."
+                    style={{ borderRadius: "8px" }}
+                  />
                 </Form.Item>
               </Col>
 
               <Col xs={24} md={12}>
-                <Form.Item name="max_stock" label={<span style={{ fontWeight: 600 }}>Tồn tối đa</span>}>
-                  <InputNumber placeholder="Số lượng tối đa" style={{ width: "100%", borderRadius: "8px" }} min={0} />
+                <Form.Item
+                  name="brand"
+                  label={<span style={{ fontWeight: 600 }}>Thương hiệu</span>}
+                >
+                  <Input
+                    placeholder="VD: Sony, Samsung, Vinamilk..."
+                    style={{ borderRadius: "8px" }}
+                  />
                 </Form.Item>
               </Col>
 
+              <Col xs={24} md={12}>
+                <Form.Item
+                  name="warranty_period"
+                  label={<span style={{ fontWeight: 600 }}>Bảo hành</span>}
+                >
+                  <Input
+                    placeholder="VD: 12 tháng, 2 năm..."
+                    style={{ borderRadius: "8px" }}
+                  />
+                </Form.Item>
+              </Col>
+
+              {/* ===== HÌNH ẢNH - HIỂN THỊ Ở CẢ 2 CHẾ ĐỘ ===== */}
               <Col xs={24}>
                 <Form.Item
-                  label={<span style={{ fontWeight: 600 }}>Hình ảnh sản phẩm</span>}
+                  label={
+                    <span style={{ fontWeight: 600 }}>Hình ảnh sản phẩm</span>
+                  }
                   name="image"
                   valuePropName="fileList"
                   getValueFromEvent={normFile}
@@ -485,7 +724,9 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
                         form.setFieldsValue({ image: newList });
                       }}
                       beforeUpload={(file) => {
-                        const isValid = ["image/jpeg", "image/png"].includes(file.type);
+                        const isValid = ["image/jpeg", "image/png"].includes(
+                          file.type
+                        );
                         if (!isValid) {
                           message.error("Chỉ chấp nhận file JPG/PNG!");
                           return Upload.LIST_IGNORE;
@@ -514,17 +755,25 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
                       style={{ borderRadius: "8px" }}
                     >
                       <div>
-                        <InboxOutlined style={{ fontSize: 48, color: "#1890ff" }} />
+                        <InboxOutlined
+                          style={{ fontSize: 48, color: "#1890ff" }}
+                        />
                         <p className="ant-upload-text">Kéo & thả ảnh vào đây</p>
-                        <p className="ant-upload-hint">hoặc click để chọn file</p>
+                        <p className="ant-upload-hint">
+                          hoặc click để chọn file
+                        </p>
                       </div>
                     </Upload.Dragger>
                   </ImgCrop>
                 </Form.Item>
               </Col>
 
+              {/* ===== MÔ TẢ - HIỂN THỊ Ở CẢ 2 CHẾ ĐỘ ===== */}
               <Col xs={24}>
-                <Form.Item name="description" label={<span style={{ fontWeight: 600 }}>Mô tả</span>}>
+                <Form.Item
+                  name="description"
+                  label={<span style={{ fontWeight: 600 }}>Mô tả</span>}
+                >
                   <TextArea
                     placeholder="Nhập mô tả sản phẩm (tùy chọn)"
                     rows={4}
@@ -541,7 +790,10 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
         <Divider style={{ margin: "20px 0" }} />
 
         <Form.Item style={{ marginBottom: 0 }}>
-          <Space style={{ width: "100%", justifyContent: "flex-end" }} size="middle">
+          <Space
+            style={{ width: "100%", justifyContent: "flex-end" }}
+            size="middle"
+          >
             <Button
               size="large"
               icon={<CloseOutlined />}
@@ -573,7 +825,7 @@ export default function ProductForm({ storeId, product = null, onSuccess, onCanc
         </Form.Item>
       </Form>
 
-      <style jsx global>{`
+      <style>{`
         .ant-modal-body::-webkit-scrollbar {
           width: 8px;
         }

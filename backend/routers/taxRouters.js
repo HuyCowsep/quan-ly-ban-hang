@@ -1,4 +1,4 @@
-// routes/taxRoutes.js - ✅ BẢN ĐÃ XÓA 404 HANDLER
+// routes/taxRoutes.js -  BẢN ĐÃ XÓA 404 HANDLER
 const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
@@ -24,7 +24,7 @@ const TaxDeclaration = require("../models/TaxDeclaration");
 
 // ==================== LOGGING MIDDLEWARE ====================
 router.use((req, res, next) => {
-  console.log(`📋 [TAX] ${req.method} ${req.originalUrl}`);
+  console.log(` [TAX] ${req.method} ${req.originalUrl}`);
   console.log(`   Query:`, req.query);
   console.log(`   Params:`, req.params);
   console.log(
@@ -61,7 +61,7 @@ const taxStoreAccess = async (req, res, next) => {
 
       // Validate ObjectId trước khi query
       if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-        console.log(`   ❌ Invalid ObjectId: ${req.params.id}`);
+        console.log(`    Invalid ObjectId: ${req.params.id}`);
         return res.status(400).json({
           success: false,
           message: "ID không hợp lệ",
@@ -74,12 +74,12 @@ const taxStoreAccess = async (req, res, next) => {
         );
         if (doc?.shopId) {
           storeId = doc.shopId.toString();
-          console.log(`   ✅ Found storeId from declaration: ${storeId}`);
+          console.log(`    Found storeId from declaration: ${storeId}`);
         } else {
           console.log(`   ⚠️ Declaration not found or no shopId`);
         }
       } catch (dbError) {
-        console.error(`   ❌ DB error getting declaration:`, dbError);
+        console.error(`    DB error getting declaration:`, dbError);
         return res.status(500).json({
           success: false,
           message: "Lỗi truy vấn tờ khai",
@@ -88,19 +88,19 @@ const taxStoreAccess = async (req, res, next) => {
     }
 
     if (!storeId) {
-      console.log(`   ❌ No storeId found in request`);
+      console.log(`    No storeId found in request`);
       return res.status(400).json({
         success: false,
         message: "Thiếu storeId (query/body/header/user/declaration)",
       });
     }
 
-    console.log(`   ✅ storeId resolved: ${storeId}`);
+    console.log(`    storeId resolved: ${storeId}`);
     req.storeId = storeId;
     req.currentStoreId = storeId;
     next();
   } catch (error) {
-    console.error("❌ taxStoreAccess error:", error);
+    console.error(" taxStoreAccess error:", error);
     return res.status(500).json({
       success: false,
       message: "Lỗi kiểm tra store access",
@@ -112,7 +112,7 @@ const taxStoreAccess = async (req, res, next) => {
 // ==================== VALIDATE ID MIDDLEWARE ====================
 const validateObjectId = (req, res, next) => {
   if (req.params.id && !mongoose.Types.ObjectId.isValid(req.params.id)) {
-    console.log(`   ❌ Invalid ObjectId in params: ${req.params.id}`);
+    console.log(`    Invalid ObjectId in params: ${req.params.id}`);
     return res.status(400).json({
       success: false,
       message: `ID không hợp lệ: ${req.params.id}`,
@@ -122,14 +122,14 @@ const validateObjectId = (req, res, next) => {
 };
 
 // ==================== ROUTES ====================
-// ✅ QUAN TRỌNG: Đặt routes theo thứ tự chính xác
+//  QUAN TRỌNG: Đặt routes theo thứ tự chính xác
 
 // 1. Routes cụ thể không có :id
 router.get(
   "/preview",
   verifyToken,
   taxStoreAccess,
-  requirePermission("tax:preview"),
+  requirePermission("taxes:preview"),
   previewSystemRevenue
 );
 
@@ -137,7 +137,7 @@ router.get(
   "/",
   verifyToken,
   taxStoreAccess,
-  requirePermission("tax:list"),
+  requirePermission("taxes:list"),
   listDeclarations
 );
 
@@ -145,7 +145,7 @@ router.post(
   "/",
   verifyToken,
   taxStoreAccess,
-  requirePermission("tax:create"),
+  requirePermission("taxes:create"),
   createTaxDeclaration
 );
 
@@ -155,7 +155,7 @@ router.post(
   verifyToken,
   validateObjectId,
   taxStoreAccess,
-  requirePermission("tax:clone"),
+  requirePermission("taxes:clone"),
   cloneTaxDeclaration
 );
 
@@ -165,7 +165,7 @@ router.post(
   validateObjectId,
   taxStoreAccess,
 
-  requirePermission("tax:approve"),
+  requirePermission("taxes:approve"),
   approveRejectDeclaration
 );
 
@@ -174,7 +174,7 @@ router.get(
   verifyToken,
   validateObjectId,
   taxStoreAccess,
-  requirePermission("tax:export"),
+  requirePermission("taxes:export"),
   exportDeclaration
 );
 
@@ -185,7 +185,7 @@ router.put(
   verifyToken,
   validateObjectId,
   taxStoreAccess,
-  requirePermission("tax:update"),
+  requirePermission("taxes:update"),
   (req, res, next) => {
     console.log(
       `   🟢 [ROUTE MATCHED] PUT /:id - Calling updateTaxDeclaration`
@@ -201,7 +201,7 @@ router.delete(
   validateObjectId,
   taxStoreAccess,
 
-  requirePermission("tax:delete"),
+  requirePermission("taxes:delete"),
   deleteTaxDeclaration
 );
 
@@ -221,7 +221,7 @@ router.get(
 
 // ==================== ERROR HANDLER ====================
 router.use((err, req, res, next) => {
-  console.error("❌ Tax route error:", err);
+  console.error(" Tax route error:", err);
   res.status(err.status || 500).json({
     success: false,
     message: err.message || "Lỗi server",

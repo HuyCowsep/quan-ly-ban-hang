@@ -20,21 +20,26 @@ async function verifyToken(req, res, next) {
     // Lấy header Authorization (hỗ trợ cả "authorization" và "Authorization")
     const authHeader =
       req.headers["authorization"] || req.headers["Authorization"];
-    if (!authHeader) {
+    
+    let token = null;
+    if (authHeader) {
+      // Kiểm tra định dạng: phải là "Bearer <token>"
+      const parts = authHeader.split(" ");
+      if (parts.length === 2 && parts[0] === "Bearer") {
+        token = parts[1];
+      }
+    }
+
+    // Nếu không có header, thử lấy từ query param (hữu ích cho download file)
+    if (!token && req.query.token) {
+      token = req.query.token;
+    }
+
+    if (!token) {
       return res
         .status(401)
         .json({ message: "Không tìm thấy token, vui lòng đăng nhập" });
     }
-
-    // Kiểm tra định dạng: phải là "Bearer <token>"
-    const parts = authHeader.split(" ");
-    if (parts.length !== 2 || parts[0] !== "Bearer") {
-      return res
-        .status(401)
-        .json({ message: "Token sai định dạng (phải là 'Bearer <token>')" });
-    }
-
-    const token = parts[1];
     let decoded;
     try {
       // Xác thực token bằng secret
@@ -139,8 +144,8 @@ async function checkStoreAccess(req, res, next) {
       req.query.shopId ||
       req.query.storeId ||
       req.params.storeId ||
-      req.body.storeId ||
-      req.body.shopId ||
+      req.body?.storeId ||
+      req.body?.shopId ||
       null;
 
     // Nếu chưa có storeId từ request, dùng current_store của user (nếu có)
@@ -178,7 +183,16 @@ async function checkStoreAccess(req, res, next) {
         req.storeRole = "OWNER";
         return next();
       } else {
-        // Nếu manager không phải owner thì không cho phép
+        // Nếu manager không phải owner nhưng có thể được gán quyền qua store_roles (trong tương lai)
+        const roleMapping = (userData.store_roles || []).find(
+          (r) => String(r.store) === String(store._id)
+        );
+        if (roleMapping) {
+          req.store = store;
+          req.storeRole = roleMapping.role;
+          return next();
+        }
+        
         console.log("MANAGER TRUY CẬP STORE KHÔNG PHẢI OWNER");
         return res.status(403).json({
           message: "Manager không sở hữu cửa hàng này",
@@ -194,13 +208,14 @@ async function checkStoreAccess(req, res, next) {
           (r) => String(r.store) === String(store._id)
         ) || null;
 
-      if (roleMapping) {
-        // Nếu có mapping thì cho phép và gán req.storeRole theo mapping
-        console.log("STAFF ĐƯỢC GÁN STORE → ALLOW");
+      if (roleMapping || String(userData.current_store) === String(store._id)) {
+        // Nếu có mapping hoặc đây là store hiện tại của nhân viên
+        console.log("STAFF ĐƯỢC PHÉP TRUY CẬP STORE → ALLOW");
         req.store = store;
-        req.storeRole = roleMapping.role; // có thể là OWNER hoặc STAFF theo schema bạn dùng
+        req.storeRole = roleMapping ? roleMapping.role : "STAFF"; 
         return next();
       }
+      
       // Nếu không có mapping cho store này thì deny
       console.log("STAFF TRUY CẬP STORE KHÔNG ĐƯỢC GÁN");
       return res.status(403).json({

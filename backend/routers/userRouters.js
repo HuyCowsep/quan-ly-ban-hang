@@ -61,11 +61,11 @@ const uploadAvatar = multer({
     );
 
     if (mimetypeOk && extnameOk) {
-      console.log("✅ File type accepted");
+      console.log(" File type accepted");
       return cb(null, true);
     }
 
-    console.log("❌ File type rejected");
+    console.log(" File type rejected");
     cb(new Error("Only images are allowed (jpeg, jpg, png, gif, webp)"));
   },
 });
@@ -108,11 +108,80 @@ router.post("/password/send-otp", verifyToken, sendPasswordOTP);
 router.post("/password/change", verifyToken, changePassword);
 router.post("/logout", verifyToken, logout);
 
+/**
+ * POST /api/users/push-token
+ * Lưu Expo Push Token để gửi push notifications
+ */
+router.post("/push-token", verifyToken, async (req, res) => {
+  try {
+    const { pushToken, platform, deviceName, userId } = req.body;
+
+    // Dùng userId từ body hoặc từ token
+    const targetUserId = userId || req.user._id || req.user.id;
+
+    if (!pushToken) {
+      return res.status(400).json({ message: "pushToken là bắt buộc" });
+    }
+
+    // Import User model
+    const User = require("../models/User");
+
+    const user = await User.findByIdAndUpdate(
+      targetUserId,
+      {
+        pushToken: pushToken,
+        pushTokenPlatform: platform || null,
+        pushTokenDeviceName: deviceName || null,
+        pushTokenUpdatedAt: new Date(),
+      },
+      { new: true }
+    );
+
+    if (!user) {
+      return res.status(404).json({ message: "Không tìm thấy user" });
+    }
+
+    console.log(
+      `✅ Push token saved for user ${user.username}: ${pushToken.substring(
+        0,
+        30
+      )}...`
+    );
+
+    return res.json({
+      message: "Push token đã được lưu",
+      pushToken: user.pushToken,
+      updatedAt: user.pushTokenUpdatedAt,
+    });
+  } catch (err) {
+    console.error("⚠️ Lỗi khi lưu push token:", err);
+    return res.status(500).json({ message: "Lỗi lưu push token" });
+  }
+});
+
 // ==================== MANAGER ROUTES ====================
 
-router.post("/staff/soft-delete", verifyToken, softDeleteUser);
-router.post("/staff/restore", verifyToken, restoreUser);
-router.get("/permissions/catalog", verifyToken, getPermissionCatalog);
+router.post(
+  "/staff/soft-delete",
+  verifyToken,
+  checkStoreAccess,
+  requirePermission("users:delete"),
+  softDeleteUser
+);
+router.post(
+  "/staff/restore",
+  verifyToken,
+  checkStoreAccess,
+  requirePermission("users:update"),
+  restoreUser
+);
+router.get(
+  "/permissions/catalog",
+  verifyToken,
+  checkStoreAccess,
+  requirePermission("users:view"),
+  getPermissionCatalog
+);
 
 // ==================== ADMIN / MANAGER UPDATE USER ====================
 
@@ -150,7 +219,7 @@ router.get("/staff-dashboard", verifyToken, (req, res) => {
 
 router.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
-    console.error("❌ Multer Error:", err);
+    console.error(" Multer Error:", err);
 
     if (err.code === "LIMIT_FILE_SIZE") {
       return res.status(400).json({
@@ -166,7 +235,7 @@ router.use((err, req, res, next) => {
   }
 
   if (err.message && err.message.includes("Only images")) {
-    console.error("❌ File Filter Error:", err);
+    console.error(" File Filter Error:", err);
     return res.status(400).json({
       message: err.message,
     });

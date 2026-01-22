@@ -107,7 +107,7 @@ export default function CustomerListPage() {
     } catch (err) {
       console.error("getCustomersByStore error:", err);
       Swal.fire({
-        title: "❌ Lỗi!",
+        title: " Lỗi!",
         text: "Không thể tải danh sách khách hàng của cửa hàng",
         icon: "error",
         confirmButtonText: "OK",
@@ -200,7 +200,7 @@ export default function CustomerListPage() {
       console.error("delete error:", err);
       const errorMsg = err?.response?.data?.message || "Lỗi server khi xóa";
       Swal.fire({
-        title: "❌ Lỗi!",
+        title: " Lỗi!",
         text: errorMsg,
         icon: "error",
         confirmButtonText: "OK",
@@ -239,7 +239,7 @@ export default function CustomerListPage() {
       console.error("restore error:", err);
       const errorMsg = err?.response?.data?.message || "Lỗi server khi khôi phục";
       Swal.fire({
-        title: "❌ Lỗi!",
+        title: " Lỗi!",
         text: errorMsg,
         icon: "error",
         confirmButtonText: "OK",
@@ -542,7 +542,7 @@ export default function CustomerListPage() {
               fontWeight: 700,
             }}
           >
-            👥 Quản lý Khách hàng
+             Quản lý Khách hàng
           </Title>
           <Text type="secondary" style={{ fontSize: "14px" }}>
             Quản lý thông tin khách hàng - tên, số điện thoại và lịch sử chi tiêu
@@ -824,7 +824,7 @@ export default function CustomerListPage() {
       </Modal>
 
       {/* Custom CSS for table rows */}
-      <style jsx>{`
+      <style>{`
         :global(.table-row-light) {
           background-color: #ffffff;
         }

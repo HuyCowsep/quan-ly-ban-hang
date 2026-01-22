@@ -13,8 +13,8 @@ interface CartItem {
   unit: string;
   subtotal: string;
   sku?: string;
-  priceAtTime?: string;
   price: number;
+  tax_rate?: number;
 }
 
 interface ModalPrintBillProps {
@@ -25,6 +25,8 @@ interface ModalPrintBillProps {
   totalAmount: number;
   storeName: string;
   address: string;
+  storePhone?: string;
+  storeTaxCode?: string;
   employeeName?: string;
   customerName?: string;
   customerPhone?: string;
@@ -33,7 +35,66 @@ interface ModalPrintBillProps {
   createdAt?: string;
   printCount?: number;
   earnedPoints?: number;
+  isVAT?: boolean;
+  companyName?: string;
+  taxCode?: string;
+  companyAddress?: string;
+  vatAmount?: number;
+  subtotal?: number;
+  discount?: number;
 }
+
+// Helper: Chuyển số thành chữ (Tiếng Việt) - Rất quan trọng cho hóa đơn mẫu nhà nước
+const docSoVND = (so: number): string => {
+  if (so === 0) return "Không đồng";
+  const chuSo = ["không", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín"];
+  const donVi = ["", "nghìn", "triệu", "tỷ", "nghìn tỷ", "triệu tỷ"];
+  
+  const docBlock = (block: number) => {
+    let s = "";
+    const h = Math.floor(block / 100);
+    const ch = Math.floor((block % 100) / 10);
+    const dv = block % 10;
+    
+    if (h > 0 || block >= 100) {
+      s += chuSo[h] + " trăm ";
+      if (ch === 0 && dv > 0) s += "lẻ ";
+    }
+    
+    if (ch > 1) {
+      s += chuSo[ch] + " mươi ";
+      if (dv === 1) s += "mốt ";
+      else if (dv === 5) s += "lăm ";
+      else if (dv > 0) s += chuSo[dv];
+    } else if (ch === 1) {
+      s += "mười ";
+      if (dv === 1) s += "một ";
+      else if (dv === 5) s += "lăm ";
+      else if (dv > 0) s += chuSo[dv];
+    } else if (dv > 0) {
+      s += chuSo[dv];
+    }
+    return s.trim();
+  };
+
+  let res = "";
+  let i = 0;
+  let s = Math.floor(so);
+  if (s < 0) return "Âm " + docSoVND(Math.abs(s));
+
+  do {
+    const block = s % 1000;
+    if (block > 0) {
+      const blockStr = docBlock(block);
+      res = blockStr + " " + donVi[i] + " " + res;
+    }
+    s = Math.floor(s / 1000);
+    i++;
+  } while (s > 0);
+
+  const result = res.trim();
+  return result.charAt(0).toUpperCase() + result.slice(1) + " đồng chẵn.";
+};
 
 const ModalPrintBill: React.FC<ModalPrintBillProps> = ({
   open,
@@ -43,6 +104,8 @@ const ModalPrintBill: React.FC<ModalPrintBillProps> = ({
   totalAmount,
   storeName,
   address,
+  storePhone = "",
+  storeTaxCode = "",
   employeeName = "N/A",
   customerName = "Khách vãng lai",
   customerPhone = "",
@@ -51,17 +114,36 @@ const ModalPrintBill: React.FC<ModalPrintBillProps> = ({
   createdAt,
   printCount = 0,
   earnedPoints = 0,
+  isVAT = false,
+  companyName = "",
+  taxCode = "",
+  companyAddress = "",
+  vatAmount = 0,
+  subtotal = 0,
+  discount = 0,
 }) => {
   const printRef = useRef<HTMLDivElement>(null);
+  const isPrintingRef = useRef(false);
+  const printTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleAfterPrint = () => {
+    if (isPrintingRef.current) return;
+    isPrintingRef.current = true;
+    onPrint();
+    if (printTimeoutRef.current) clearTimeout(printTimeoutRef.current);
+    printTimeoutRef.current = setTimeout(() => {
+      isPrintingRef.current = false;
+    }, 3000);
+  };
 
   const handlePrint = useReactToPrint({
     contentRef: printRef,
-    onAfterPrint: onPrint,
+    onAfterPrint: handleAfterPrint,
   });
 
   const formatPrice = (price: any) => {
-    const num = parseFloat(price) || 0;
-    return num.toLocaleString("vi-VN") + "đ";
+    const num = Math.round(parseFloat(price) || 0);
+    return num.toLocaleString("vi-VN") + " đ";
   };
 
   const now = new Date();
@@ -75,7 +157,7 @@ const ModalPrintBill: React.FC<ModalPrintBillProps> = ({
       onCancel={onCancel}
       footer={[
         <Button key="cancel" onClick={onCancel}>
-          Hủy
+          Đóng
         </Button>,
         <Button
           key="print"
@@ -85,147 +167,165 @@ const ModalPrintBill: React.FC<ModalPrintBillProps> = ({
         >
           In hóa đơn
         </Button>,
-        <div
-          key="note"
-          style={{
-            fontSize: 11,
-            color: "black",
-            marginRight: "auto",
-            marginLeft: 10,
-            marginTop: 10,
-            textAlign: "center",
-          }}
-        >
-          ⚠️ Bắt buộc phải in hóa đơn mỗi khi thanh toán thành công để cập nhật{" "}
-          <span style={{ color: "blue", fontWeight: "bold" }}>
-            HÀNG TỒN KHO
-          </span>{" "}
-          chính xác nhất.
-        </div>,
       ]}
-      width={560}
+      width={700}
     >
       <div
         ref={printRef}
-        className="p-4"
-        style={{ fontFamily: "monospace", fontSize: "12px" }}
+        style={{
+          padding: "20px",
+          color: "#000",
+          backgroundColor: "#fff",
+          fontFamily: "'Times New Roman', serif",
+          lineHeight: "1.4",
+        }}
       >
-        <Title level={3} className="text-center m-0">
-          {storeName}
-        </Title>
-        <div className="text-center">Địa chỉ: {address}</div>
-        <br></br>
-        <Text
-          style={{
-            display: "block",
-            textAlign: "center",
-            fontWeight: "bold",
-            fontSize: "18px",
-          }}
-        >
-          === HÓA ĐƠN BÁN HÀNG ===
-        </Text>
-        <br></br>
-        <div>
-          <span className="font-bold">Mã hoá đơn:</span> {orderId}
-        </div>
-        <div>
-          {" "}
-          <span className="font-bold">Nhân viên:</span> {employeeName}
-        </div>
-        <div>
-          <span className="font-bold">Khách hàng:</span> {customerName}{" "}
-          {customerPhone && `- SĐT: ${customerPhone}`}
-        </div>
-        <div>
-          <span className="font-bold">Ngày:</span>{" "}
-          {format(createdDate, "dd/MM/yyyy HH:mm")}
-        </div>
-        <div>
-          <span className="font-bold">Ngày in hoá đơn:</span>{" "}
-          {format(now, "dd/MM/yyyy HH:mm")}
-        </div>
-        {isDuplicate && (
-          <Text type="warning">
-            (Bản sao hóa đơn - lần in {printCount + 1})
-          </Text>
-        )}
-
-        <Divider className="my-2" />
-
-        <div className="font-bold mb-2">CHI TIẾT SẢN PHẨM:</div>
-        <Table
-          dataSource={cart}
-          pagination={false}
-          size="small"
-          bordered
-          rowKey={(_, idx) =>
-            idx !== undefined ? idx.toString() : Math.random().toString()
-          }
-          columns={[
-            {
-              title: "Sản phẩm",
-              dataIndex: "name",
-              key: "name",
-              render: (text, record) => `${record.name}`,
-            },
-            {
-              title: "Số lượng",
-              dataIndex: "quantity",
-              key: "quantity",
-              width: 90,
-              align: "center" as const,
-            },
-            {
-              title: "Đơn vị",
-              dataIndex: "unit",
-              key: "unit",
-              width: 80,
-              align: "center" as const,
-            },
-            {
-              title: "Đơn giá",
-              key: "price",
-              width: 80,
-              align: "center" as const,
-              render: (_, record) =>
-                formatPrice(
-                  (parseFloat(record.subtotal) || 0) / (record.quantity || 1)
-                ),
-            },
-            {
-              title: "Thành tiền",
-              dataIndex: "subtotal",
-              key: "subtotal",
-              align: "right" as const,
-              render: (value) => formatPrice(value),
-            },
-          ]}
-        />
-
-        <Divider className="my-2" />
-
-        <div className="flex justify-between font-bold">
-          <span>TỔNG TIỀN:</span>
-          <span>{formatPrice(totalAmount)}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="font-bold">Phương thức:</span>
-          <span>{paymentMethod === "cash" ? "TIỀN MẶT" : "QR CODE"}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="font-bold">Điểm tích luỹ:</span>
-          <span>{earnedPoints > 0 ? earnedPoints : "0"}</span>
-        </div>
-        <div className="flex justify-between font-bold">
-          <span className="font-bold">Trạng thái: </span>
-          <Tag color="green" style={{ marginInlineEnd: 0 }}>
-            ĐÃ THANH TOÁN
-          </Tag>
+        {/* HEADER - THÔNG TIN ĐƠN VỊ BÁN */}
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+          <div style={{ flex: 2 }}>
+            <div style={{ fontWeight: "bold", fontSize: "16px", textTransform: "uppercase" }}>
+              {storeName}
+            </div>
+            <div>Địa chỉ: {address}</div>
+            {storePhone && <div>Điện thoại: {storePhone}</div>}
+            {storeTaxCode && <div>Mã số thuế: {storeTaxCode}</div>}
+          </div>
+          <div style={{ flex: 1, textAlign: "right" }}>
+            <div style={{ fontSize: "12px" }}>Số: {orderId}</div>
+            <div style={{ fontSize: "12px" }}>Ngày: {format(createdDate, "dd/MM/yyyy")}</div>
+          </div>
         </div>
 
-        <Divider className="my-2" />
-        <div className="text-center">=== CẢM ƠN QUÝ KHÁCH ===</div>
+        <Divider style={{ margin: "10px 0", borderColor: "#000" }} />
+
+        {/* TIÊU ĐỀ HÓA ĐƠN */}
+        <div style={{ textAlign: "center", margin: "15px 0" }}>
+          <div style={{ fontWeight: "bold", fontSize: "20px" }}>
+            {isVAT ? "HÓA ĐƠN GIÁ TRỊ GIA TĂNG" : "HÓA ĐƠN BÁN LẺ"}
+          </div>
+          <div style={{ fontStyle: "italic", fontSize: "12px" }}>
+            Ngày {format(createdDate, "dd")} tháng {format(createdDate, "MM")} năm {format(createdDate, "yyyy")}
+          </div>
+        </div>
+
+        {/* THÔNG TIN KHÁCH HÀNG */}
+        <div style={{ marginBottom: 15 }}>
+          {isVAT ? (
+            <>
+              {customerName !== "Khách vãng lai" ? <div style={{ display: "flex", marginBottom: 4 }}>
+                <span style={{ minWidth: 150 }}>Họ tên người mua hàng:</span>
+                <span style={{ fontWeight: "bold" }}>{customerName}</span>
+              </div> : <div style={{ display: "flex", marginBottom: 4 }}>
+                <span style={{ minWidth: 150 }}>Họ tên người mua hàng:</span>
+                <span style={{ fontWeight: "bold" }}>{companyName}</span>
+              </div>}
+              <div style={{ display: "flex", marginBottom: 4 }}>
+                <span style={{ minWidth: 150 }}>Tên đơn vị:</span>
+                <span style={{ fontWeight: "bold" }}>{companyName || "---"}</span>
+              </div>
+              <div style={{ display: "flex", marginBottom: 4 }}>
+                <span style={{ minWidth: 150 }}>Mã số thuế:</span>
+                <span>{taxCode || "---"}</span>
+              </div>
+              <div style={{ display: "flex", marginBottom: 4 }}>
+                <span style={{ minWidth: 150 }}>Địa chỉ:</span>
+                <span>{companyAddress || "---"}</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ display: "flex", marginBottom: 4 }}>
+                <span style={{ minWidth: 150 }}>Họ tên người mua hàng:</span>
+                <span style={{ fontWeight: "bold" }}>{customerName}</span>
+              </div>
+              <div style={{ display: "flex", marginBottom: 4 }}>
+                <span style={{ minWidth: 150 }}>Điện thoại:</span>
+                <span>{customerPhone || "---"}</span>
+              </div>
+            </>
+          )}
+          <div style={{ display: "flex", marginBottom: 4 }}>
+            <span style={{ minWidth: 150 }}>Hình thức thanh toán:</span>
+            <span style={{ textTransform: "uppercase" }}>{paymentMethod === "cash" ? "Tiền mặt" : "Chuyển khoản / QR"}</span>
+          </div>
+        </div>
+
+        {/* BẢNG CHI TIẾT SẢN PHẨM */}
+        <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 15 }}>
+          <thead>
+            <tr style={{ backgroundColor: "#f2f2f2" }}>
+              <th style={{ border: "1px solid #000", padding: "5px", width: "40px" }}>STT</th>
+              <th style={{ border: "1px solid #000", padding: "5px" }}>Tên hàng hóa, dịch vụ</th>
+              <th style={{ border: "1px solid #000", padding: "5px", width: "70px" }}>Đơn vị</th>
+              <th style={{ border: "1px solid #000", padding: "5px", width: "60px" }}>SL</th>
+              <th style={{ border: "1px solid #000", padding: "5px", width: "100px" }}>Đơn giá</th>
+              <th style={{ border: "1px solid #000", padding: "5px", width: "120px" }}>Thành tiền</th>
+            </tr>
+          </thead>
+          <tbody>
+            {cart.map((item, index) => {
+              const unitPrice = (parseFloat(item.subtotal) || 0) / (item.quantity || 1);
+              return (
+                <tr key={index}>
+                  <td style={{ border: "1px solid #000", padding: "5px", textAlign: "center" }}>{index + 1}</td>
+                  <td style={{ border: "1px solid #000", padding: "5px" }}>{item.name}</td>
+                  <td style={{ border: "1px solid #000", padding: "5px", textAlign: "center" }}>{item.unit}</td>
+                  <td style={{ border: "1px solid #000", padding: "5px", textAlign: "center" }}>{item.quantity}</td>
+                  <td style={{ border: "1px solid #000", padding: "5px", textAlign: "right" }}>{formatPrice(unitPrice)}</td>
+                  <td style={{ border: "1px solid #000", padding: "5px", textAlign: "right" }}>{formatPrice(item.subtotal)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+
+        {/* TỔNG CỘNG */}
+        <div style={{ width: "100%", marginLeft: "auto" }}>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
+            <span style={{ minWidth: 200 }}>Cộng tiền hàng:</span>
+            <span style={{ minWidth: 120, textAlign: "right", fontWeight: "bold" }}>{formatPrice(subtotal)}</span>
+          </div>
+          {discount > 0 && (
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
+              <span style={{ minWidth: 200 }}>Chiết khấu (giảm giá):</span>
+              <span style={{ minWidth: 120, textAlign: "right", fontWeight: "bold" }}>-{formatPrice(discount)}</span>
+            </div>
+          )}
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
+            <span style={{ minWidth: 200 }}>Tiền thuế GTGT:</span>
+            <span style={{ minWidth: 120, textAlign: "right", fontWeight: "bold" }}>{formatPrice(vatAmount)}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4, fontSize: "16px" }}>
+            <span style={{ minWidth: 200, fontWeight: "bold" }}>Tổng cộng tiền thanh toán:</span>
+            <span style={{ minWidth: 120, textAlign: "right", fontWeight: "bold", borderTop: "1px solid #000" }}>
+              {formatPrice(totalAmount)}
+            </span>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 10, fontStyle: "italic" }}>
+          Số tiền viết bằng chữ: <span style={{ fontWeight: "bold" }}>{docSoVND(totalAmount)}</span>
+        </div>
+
+        {/* CHỮ KÝ */}
+        <div style={{ display: "flex", marginTop: 40, textAlign: "center" }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: "bold" }}>NGƯỜI MUA HÀNG</div>
+            <div style={{ fontSize: "11px", fontStyle: "italic" }}>(Ký, ghi rõ họ tên)</div>
+            <div style={{ marginTop: 50, fontWeight: "bold" }}>{customerName !== "Khách vãng lai" ? customerName : companyName}</div>
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: "bold" }}>NGƯỜI BÁN HÀNG</div>
+            <div style={{ fontSize: "11px", fontStyle: "italic" }}>(Ký, ghi rõ họ tên)</div>
+            <div style={{ marginTop: 50, fontWeight: "bold" }}>{employeeName}</div>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 40, textAlign: "center", fontSize: "11px", color: "#666" }}>
+          {isDuplicate && <div>(Bản sao hóa đơn - lần in thứ {printCount + 1})</div>}
+          <div>Cảm ơn quý khách đã mua hàng!</div>
+          <div style={{ fontSize: "10px" }}>Hệ thống quản lý SmartBiz v1.0</div>
+        </div>
       </div>
     </Modal>
   );

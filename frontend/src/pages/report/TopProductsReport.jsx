@@ -6,6 +6,8 @@ import axios from "axios";
 import Layout from "../../components/Layout";
 import dayjs from "dayjs";
 import quarterOfYear from "dayjs/plugin/quarterOfYear";
+import { useAuth } from "../../context/AuthContext";
+import { useLocation } from "react-router-dom";
 import debounce from "../../utils/debounce"; // File debounce của bạn
 
 dayjs.extend(quarterOfYear);
@@ -17,7 +19,13 @@ const { MonthPicker, YearPicker } = DatePicker;
 const apiUrl = import.meta.env.VITE_API_URL;
 
 const TopProductsReport = () => {
-  const currentStore = JSON.parse(localStorage.getItem("currentStore") || "{}");
+  const { currentStore: authStore } = useAuth();
+  const location = useLocation();
+  const queryParams = new URLSearchParams(location.search);
+  const urlStoreId = queryParams.get("storeId");
+
+  // Ưu tiên store từ AuthContext, sau đó đến URL, cuối cùng là localStorage fallback
+  const currentStore = authStore || (urlStoreId ? { _id: urlStoreId } : JSON.parse(localStorage.getItem("currentStore") || "{}"));
   const token = localStorage.getItem("token");
 
   const [products, setProducts] = useState([]);
@@ -189,7 +197,7 @@ const TopProductsReport = () => {
         </Text>
       ),
     },
-    { title: "Doanh thu", dataIndex: "totalSales", align: "right", render: formatVND },
+    { title: "Tổng giá bán", dataIndex: "totalSales", align: "right", render: formatVND },
     { title: "Số đơn", dataIndex: "countOrders", align: "center" },
   ];
 
@@ -379,7 +387,9 @@ const TopProductsReport = () => {
         ) : loading ? (
           <Card style={{ border: "1px solid #8c8c8c" }}>
             <div style={{ textAlign: "center", padding: "80px 0" }}>
-              <Spin size="large" tip="Đang tải top sản phẩm..." />
+              <Spin size="large" tip="Đang tải top sản phẩm...">
+                <div style={{ minHeight: 80 }} />
+              </Spin>
             </div>
           </Card>
         ) : products.length === 0 ? (

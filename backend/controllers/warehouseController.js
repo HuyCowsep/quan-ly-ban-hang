@@ -1,7 +1,7 @@
 // backend/controllers/warehouseController.js
 const Warehouse = require("../models/Warehouse");
 const Store = require("../models/Store");
-const logActivity = require("../utils/logActivity"); // ✅ giống loyaltyController
+const logActivity = require("../utils/logActivity"); //  giống loyaltyController
 
 // ===== GET all warehouses =====
 const getWarehouses = async (req, res) => {
@@ -59,8 +59,10 @@ const getWarehouses = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ Lỗi getWarehouses:", error);
-    return res.status(500).json({ message: "Lỗi server", error: error.message });
+    console.error(" Lỗi getWarehouses:", error);
+    return res
+      .status(500)
+      .json({ message: "Lỗi server", error: error.message });
   }
 };
 
@@ -87,8 +89,10 @@ const getWarehouseById = async (req, res) => {
       warehouse,
     });
   } catch (error) {
-    console.error("❌ Lỗi getWarehouseById:", error);
-    return res.status(500).json({ message: "Lỗi server", error: error.message });
+    console.error(" Lỗi getWarehouseById:", error);
+    return res
+      .status(500)
+      .json({ message: "Lỗi server", error: error.message });
   }
 };
 
@@ -193,10 +197,13 @@ const createWarehouse = async (req, res) => {
 
     // Update Store: set default_warehouse_id nếu is_default
     if (is_default) {
-      await Store.updateOne({ _id: storeId }, { default_warehouse_id: warehouse._id });
+      await Store.updateOne(
+        { _id: storeId },
+        { default_warehouse_id: warehouse._id }
+      );
     }
 
-    // ✅ ghi log giống loyaltyController
+    //  ghi log giống loyaltyController
     await logActivity({
       user: req.user,
       store: { _id: storeId },
@@ -213,8 +220,10 @@ const createWarehouse = async (req, res) => {
       warehouse,
     });
   } catch (error) {
-    console.error("❌ Lỗi createWarehouse:", error);
-    return res.status(500).json({ message: "Lỗi server", error: error.message });
+    console.error(" Lỗi createWarehouse:", error);
+    return res
+      .status(500)
+      .json({ message: "Lỗi server", error: error.message });
   }
 };
 
@@ -254,11 +263,18 @@ const updateWarehouse = async (req, res) => {
       }
     }
 
-    const updatedWarehouse = await Warehouse.findByIdAndUpdate(warehouseId, updateData, { new: true }).populate("manager_ids", "name email phone");
+    const updatedWarehouse = await Warehouse.findByIdAndUpdate(
+      warehouseId,
+      updateData,
+      { new: true }
+    ).populate("manager_ids", "name email phone");
 
     // Update Store nếu set default
     if (updateData.is_default) {
-      await Store.updateOne({ _id: storeId }, { default_warehouse_id: warehouseId });
+      await Store.updateOne(
+        { _id: storeId },
+        { default_warehouse_id: warehouseId }
+      );
     }
 
     await logActivity({
@@ -277,8 +293,10 @@ const updateWarehouse = async (req, res) => {
       warehouse: updatedWarehouse,
     });
   } catch (error) {
-    console.error("❌ Lỗi updateWarehouse:", error);
-    return res.status(500).json({ message: "Lỗi server", error: error.message });
+    console.error(" Lỗi updateWarehouse:", error);
+    return res
+      .status(500)
+      .json({ message: "Lỗi server", error: error.message });
   }
 };
 
@@ -299,11 +317,15 @@ const deleteWarehouse = async (req, res) => {
 
     if (warehouse.is_default) {
       return res.status(400).json({
-        message: "Không thể xóa kho mặc định. Vui lòng chọn kho khác làm mặc định trước.",
+        message:
+          "Không thể xóa kho mặc định. Vui lòng chọn kho khác làm mặc định trước.",
       });
     }
 
-    await Warehouse.updateOne({ _id: warehouseId }, { isDeleted: true, is_default: false });
+    await Warehouse.updateOne(
+      { _id: warehouseId },
+      { isDeleted: true, is_default: false }
+    );
 
     await logActivity({
       user: req.user,
@@ -320,8 +342,10 @@ const deleteWarehouse = async (req, res) => {
       message: "Xóa kho thành công",
     });
   } catch (error) {
-    console.error("❌ Lỗi deleteWarehouse:", error);
-    return res.status(500).json({ message: "Lỗi server", error: error.message });
+    console.error(" Lỗi deleteWarehouse:", error);
+    return res
+      .status(500)
+      .json({ message: "Lỗi server", error: error.message });
   }
 };
 
@@ -337,7 +361,9 @@ const restoreWarehouse = async (req, res) => {
     });
 
     if (!warehouse) {
-      return res.status(404).json({ message: "Kho không tồn tại hoặc không bị xóa" });
+      return res
+        .status(404)
+        .json({ message: "Kho không tồn tại hoặc không bị xóa" });
     }
 
     await Warehouse.updateOne({ _id: warehouseId }, { isDeleted: false });
@@ -357,8 +383,10 @@ const restoreWarehouse = async (req, res) => {
       message: "Khôi phục kho thành công",
     });
   } catch (error) {
-    console.error("❌ Lỗi restoreWarehouse:", error);
-    return res.status(500).json({ message: "Lỗi server", error: error.message });
+    console.error(" Lỗi restoreWarehouse:", error);
+    return res
+      .status(500)
+      .json({ message: "Lỗi server", error: error.message });
   }
 };
 
@@ -377,9 +405,15 @@ const setDefaultWarehouse = async (req, res) => {
       return res.status(404).json({ message: "Kho không tồn tại" });
     }
 
-    await Warehouse.updateMany({ store_id: storeId, _id: { $ne: warehouseId } }, { is_default: false });
+    await Warehouse.updateMany(
+      { store_id: storeId, _id: { $ne: warehouseId } },
+      { is_default: false }
+    );
     await Warehouse.updateOne({ _id: warehouseId }, { is_default: true });
-    await Store.updateOne({ _id: storeId }, { default_warehouse_id: warehouseId });
+    await Store.updateOne(
+      { _id: storeId },
+      { default_warehouse_id: warehouseId }
+    );
 
     await logActivity({
       user: req.user,
@@ -397,8 +431,10 @@ const setDefaultWarehouse = async (req, res) => {
       warehouse,
     });
   } catch (error) {
-    console.error("❌ Lỗi setDefaultWarehouse:", error);
-    return res.status(500).json({ message: "Lỗi server", error: error.message });
+    console.error(" Lỗi setDefaultWarehouse:", error);
+    return res
+      .status(500)
+      .json({ message: "Lỗi server", error: error.message });
   }
 };
 

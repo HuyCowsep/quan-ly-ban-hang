@@ -5,14 +5,18 @@ const OrderItem = require("../models/OrderItem");
 const { periodToRange } = require("../utils/period");
 const { Parser } = require("json2csv");
 const PDFDocument = require("pdfkit");
-const XLSX = require("xlsx");
+// NOTE: `xlsx` community build ignores most cell styles.
+// Use `xlsx-js-style` to generate styled xlsx files.
+const XLSX = require("xlsx-js-style");
 const dayjs = require("dayjs");
 require("dayjs/locale/vi");
 dayjs.locale("vi");
+const { sendEmptyNotificationWorkbook } = require("../utils/excelExport");
+const Store = require("../models/Store");
 
 // Các trạng thái đơn hàng được tính vào doanh thu.
 // Lưu ý: `partially_refunded` vẫn tính doanh thu theo `totalAmount/subtotal` hiện có trong DB.
-const PAID_STATUSES = ["paid", "partially_refunded"]; // thống kê doanh thu tính cả hoàn 1 phần
+const PAID_STATUSES = ["paid", "partially_refunded", "refunded"]; // thống kê doanh thu tính cả hoàn 1 phần và hoàn toàn bộ
 
 // Ép id về ObjectId an toàn (tránh lỗi khi id là number/undefined).
 function toObjectId(id) {
@@ -45,9 +49,22 @@ function safeFilePart(value) {
   return normalized || "Unknown";
 }
 
-function getExporterNameForFile(req) {
-  return safeFilePart(req?.user?.fullname || req?.user?.fullName || req?.user?.name || req?.user?.username || req?.user?.email);
+function getExporterNameDisplay(req) {
+  const name =
+    req?.user?.fullname ||
+    req?.user?.fullName ||
+    req?.user?.name ||
+    req?.user?.username ||
+    req?.user?.email;
+  const trimmed = String(name ?? "").trim();
+  return trimmed || "Không rõ";
 }
+
+function getExporterNameForFile(req) {
+  return safeFilePart(getExporterNameDisplay(req));
+}
+
+const path = require("path");
 
 function buildExportFileName({ reportName, req, periodKey }) {
   const exportDate = dayjs().format("DD-MM-YYYY");
@@ -56,20 +73,115 @@ function buildExportFileName({ reportName, req, periodKey }) {
 
   // Chỉ report chi tiết (exportRevenue) mới thêm kì xuất.
   if (periodKey) {
-    return `${reportPart}_${exportDate}_${exporterName}_${safeFilePart(periodKey)}.xlsx`;
+    return `${reportPart}_${exportDate}_${exporterName}_${safeFilePart(
+      periodKey
+    )}.xlsx`;
   }
   return `${reportPart}_${exportDate}_${exporterName}.xlsx`;
 }
 
+function periodTypeToVietnamese(periodType) {
+  const t = String(periodType || "").toLowerCase();
+  if (t === "day") return "Ngày";
+  if (t === "month") return "Tháng";
+  if (t === "quarter") return "Quý";
+  if (t === "year") return "Năm";
+  // fallback: viết hoa chữ cái đầu
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : "—";
+}
+
+function createWorksheetWithReportHeader({ reportTitle, req, sheetData }) {
+  const exporterName = getExporterNameDisplay(req);
+  const storeName = req.store?.name || "Cửa hàng";
+
+  const headerAOA = [
+    [storeName.toUpperCase(), "", "", "CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM"],
+    ["", "", "", "Độc lập - Tự do - Hạnh phúc"],
+    ["", "", "", "-----------------"],
+    [],
+    ["", reportTitle.toUpperCase()],
+    ["", `Người xuất: ${exporterName}`],
+    ["", `Ngày xuất: ${dayjs().format("DD/MM/YYYY HH:mm")}`],
+    [],
+  ];
+
+  const ws = XLSX.utils.aoa_to_sheet(headerAOA);
+
+  // Merge cells for legal header and title
+  if (!ws["!merges"]) ws["!merges"] = [];
+  ws["!merges"].push({ s: { r: 0, c: 3 }, e: { r: 0, c: 6 } }); // Motto line 1
+  ws["!merges"].push({ s: { r: 1, c: 3 }, e: { r: 1, c: 6 } }); // Motto line 2
+  ws["!merges"].push({ s: { r: 2, c: 3 }, e: { r: 2, c: 6 } }); // Motto dash
+  ws["!merges"].push({ s: { r: 4, c: 1 }, e: { r: 4, c: 4 } }); // Title
+
+  XLSX.utils.sheet_add_json(ws, sheetData, {
+    origin: "A9",
+    skipHeader: false,
+  });
+
+  // ===== Styling (nếu lib xlsx build hiện tại hỗ trợ cell styles) =====
+  const styleCell = (addr, style) => {
+    if (!ws[addr]) ws[addr] = { t: "s", v: "" };
+    ws[addr].s = { ...(ws[addr].s || {}), ...style };
+  };
+
+  // 2 dòng header trên cùng
+  const topLabelStyle = {
+    font: { bold: true, color: { rgb: "FFFFFFFF" } },
+    fill: { patternType: "solid", fgColor: { rgb: "FF1890FF" } },
+    alignment: { horizontal: "left", vertical: "center" },
+  };
+  const topValueStyle = {
+    font: { bold: true, color: { rgb: "FF262626" } },
+    alignment: { horizontal: "left", vertical: "center" },
+  };
+
+  styleCell("A1", topLabelStyle);
+  styleCell("A2", topLabelStyle);
+  styleCell("B1", topValueStyle);
+  styleCell("B2", topValueStyle);
+
+  // Header của bảng dữ liệu nằm ở dòng 4 (index 3) vì có 2 dòng header + 1 dòng trống.
+  const headerStyle = {
+    font: { bold: true, color: { rgb: "FFFFFFFF" } },
+    fill: { patternType: "solid", fgColor: { rgb: "FF1890FF" } },
+    alignment: { horizontal: "center", vertical: "center" },
+  };
+
+  if (ws["!ref"]) {
+    const range = XLSX.utils.decode_range(ws["!ref"]);
+    const headerRowIndex = 3;
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const addr = XLSX.utils.encode_cell({ r: headerRowIndex, c });
+      if (!ws[addr]) continue;
+      ws[addr].s = { ...(ws[addr].s || {}), ...headerStyle };
+    }
+  }
+
+  // Chiều cao hàng cho dễ nhìn
+  ws["!rows"] = ws["!rows"] || [];
+  ws["!rows"][0] = { hpt: 20 };
+  ws["!rows"][1] = { hpt: 20 };
+  ws["!rows"][2] = { hpt: 8 };
+  ws["!rows"][3] = { hpt: 18 };
+
+  return ws;
+}
+
 // ========== HÀM TÍNH DOANH THU – CÓ CẢ HOÀN 1 NỬA partially_refunded ==========
-async function calcRevenueByPeriod({ storeId, periodType, periodKey, type = "total" }) {
+async function calcRevenueByPeriod({
+  storeId,
+  periodType,
+  periodKey,
+  type = "total",
+}) {
   // Chuyển periodType + periodKey (vd: month + 2025-12) thành khoảng ngày [start, end]
   const { start, end } = periodToRange(periodType, periodKey);
 
   // Chỉ lấy các đơn ĐÃ THANH TOÁN (toàn bộ hoặc 1 phần)
   const baseMatch = {
     storeId: toObjectId(storeId),
-    status: { $in: PAID_STATUSES }, // ← quan trọng: lấy cả 2 loại
+    status: { $in: ["paid", "partially_refunded"] }, // Lấy cả 3 loại
     createdAt: { $gte: start, $lte: end },
   };
 
@@ -79,40 +191,64 @@ async function calcRevenueByPeriod({ storeId, periodType, periodKey, type = "tot
       {
         $group: {
           _id: null,
-          totalRevenue: {
-            $sum: { $toDecimal: "$totalAmount" },
-          },
+          grossRevenue: { $sum: { $toDecimal: "$totalAmount" } },
           countOrders: { $sum: 1 },
-          //đếm đơn đã hoàn thành
           completedOrders: {
-            $sum: {
-              $cond: [{ $eq: ["$status", "paid"] }, 1, 0],
-            },
+            $sum: { $cond: [{ $eq: ["$status", "paid"] }, 1, 0] },
           },
-          //đếm đơn hoàn 1 nữa vì vẫn có doanh thu
           partialRefundOrders: {
-            $sum: {
-              $cond: [{ $eq: ["$status", "partially_refunded"] }, 1, 0],
-            },
+            $sum: { $cond: [{ $eq: ["$status", "partially_refunded"] }, 1, 0] },
+          },
+          refundedOrders: {
+            $sum: { $cond: [{ $eq: ["$status", "refunded"] }, 1, 0] },
           },
         },
       },
       {
         $project: {
           _id: 0,
-          totalRevenue: { $toDouble: "$totalRevenue" },
+          grossRevenue: { $toDouble: "$grossRevenue" },
           countOrders: 1,
           completedOrders: 1,
           partialRefundOrders: 1,
-          avgOrderValue: {
-            $cond: [{ $gt: ["$countOrders", 0] }, { $toDouble: { $divide: ["$totalRevenue", "$countOrders"] } }, 0],
-          },
+          refundedOrders: 1,
         },
       },
     ];
 
     const result = await Order.aggregate(pipeline);
-    const row = result[0] || { totalRevenue: 0, countOrders: 0 };
+    const row = result[0] || { grossRevenue: 0, countOrders: 0 };
+
+    // --- LẤY TIỀN HOÀN PHÁT SINH TRONG KỲ ---
+    const refundAgg = await mongoose.model("OrderRefund").aggregate([
+      { $match: { refundedAt: { $gte: start, $lte: end } } },
+      {
+        $lookup: {
+          from: "orders",
+          localField: "orderId",
+          foreignField: "_id",
+          as: "orderInfo",
+        },
+      },
+      { $unwind: "$orderInfo" },
+      { $match: { "orderInfo.storeId": toObjectId(storeId) } },
+      {
+        $match: {
+          "orderInfo.status": { $in: ["paid", "partially_refunded"] },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          totalRefundAmount: { $sum: { $toDecimal: "$refundAmount" } },
+        },
+      },
+    ]);
+    const totalRefundAmount = refundAgg[0]
+      ? Number(refundAgg[0].totalRefundAmount.toString())
+      : 0;
+    const finalRevenue = row.grossRevenue - totalRefundAmount;
+
     const dailyPipeline = [
       { $match: baseMatch },
       {
@@ -142,71 +278,185 @@ async function calcRevenueByPeriod({ storeId, periodType, periodKey, type = "tot
     ];
     const dailyRevenue = await Order.aggregate(dailyPipeline);
 
+    // Bổ sung các khoản hoàn vào daily revenue
+    const dailyRefundAgg = await mongoose.model("OrderRefund").aggregate([
+      { $match: { refundedAt: { $gte: start, $lte: end } } },
+      {
+        $lookup: {
+          from: "orders",
+          localField: "orderId",
+          foreignField: "_id",
+          as: "orderInfo",
+        },
+      },
+      { $unwind: "$orderInfo" },
+      { $match: { "orderInfo.storeId": toObjectId(storeId) } },
+      {
+        $group: {
+          _id: {
+            day: {
+              $dateToString: {
+                format: "%Y-%m-%d",
+                date: "$refundedAt",
+                timezone: "Asia/Ho_Chi_Minh",
+              },
+            },
+          },
+          refund: { $sum: { $toDecimal: "$refundAmount" } },
+        },
+      },
+    ]);
+
+    const refundMap = new Map(
+      dailyRefundAgg.map((r) => [r._id.day, Number(r.refund.toString())])
+    );
+
+    // Merge: Nếu ngày nào có hoàn mà không có bán, vẫn phải hiện?
+    // Thường chart chỉ hiện ngày có bán, nhưng ta nên merge.
+    const mergedDaily = [...dailyRevenue];
+    refundMap.forEach((refundVal, day) => {
+      const existing = mergedDaily.find((d) => d.day === day);
+      if (existing) {
+        existing.revenue -= refundVal;
+      } else {
+        mergedDaily.push({ day, revenue: -refundVal, countOrders: 0 });
+      }
+    });
+    mergedDaily.sort((a, b) => a.day.localeCompare(b.day));
+
     return [
       {
         periodType,
         periodKey,
         periodStart: start,
         periodEnd: end,
-        totalRevenue: row.totalRevenue,
+        totalRevenue: finalRevenue,
+        grossRevenue: row.grossRevenue,
+        totalRefundAmount: totalRefundAmount,
         countOrders: row.countOrders,
-        // ✅ THÊM 2 FIELD NÀY
         completedOrders: row.completedOrders || 0,
         partialRefundOrders: row.partialRefundOrders || 0,
-        avgOrderValue: row.avgOrderValue || 0,
-        // ✅ THÊM MỚI – FE xài chart
-        dailyRevenue,
+        refundedOrders: row.refundedOrders || 0,
+        avgOrderValue: row.countOrders > 0 ? finalRevenue / row.countOrders : 0,
+        dailyRevenue: mergedDaily,
       },
     ];
   }
 
   // =================== THEO NHÂN VIÊN ===================
   if (type === "employee") {
-    const pipeline = [
+    // 1. Gross revenue by original seller
+    const grossPipeline = [
+      { $match: baseMatch },
+      {
+        $group: {
+          _id: "$employeeId",
+          grossRevenue: { $sum: { $toDecimal: "$totalAmount" } },
+          countOrders: { $sum: 1 },
+        },
+      },
+    ];
+    const grossResults = await Order.aggregate(grossPipeline);
+
+    // 2. Refunds by original seller's orders (Dựa trên ngày hoàn)
+    const refundPipeline = [
+      { $match: { refundedAt: { $gte: start, $lte: end } } },
+      {
+        $lookup: {
+          from: "orders",
+          localField: "orderId",
+          foreignField: "_id",
+          as: "orderInfo",
+        },
+      },
+      { $unwind: "$orderInfo" },
+      { $match: { "orderInfo.storeId": toObjectId(storeId) } },
       {
         $match: {
-          ...baseMatch,
-          employeeId: { $ne: null }, // ⭐ DÒNG QUAN TRỌNG
+          "orderInfo.status": { $in: ["paid", "partially_refunded"] },
         },
       },
       {
         $group: {
-          _id: "$employeeId",
-          totalRevenue: { $sum: { $toDecimal: "$totalAmount" } },
-          countOrders: { $sum: 1 },
+          _id: "$orderInfo.employeeId",
+          refundAmount: { $sum: { $toDecimal: "$refundAmount" } },
         },
       },
-      {
-        $addFields: {
-          totalRevenueDouble: { $toDouble: "$totalRevenue" },
-          avgOrderValue: {
-            $cond: [{ $gt: ["$countOrders", 0] }, { $toDouble: { $divide: ["$totalRevenue", "$countOrders"] } }, 0],
-          },
-        },
-      },
-      {
-        $lookup: {
-          from: "employees",
-          localField: "_id",
-          foreignField: "_id",
-          as: "employeeInfo",
-          pipeline: [{ $project: { fullName: 1, phone: 1 } }],
-        },
-      },
-      { $unwind: "$employeeInfo" },
-      { $sort: { totalRevenue: -1 } },
     ];
+    const refundResults = await mongoose
+      .model("OrderRefund")
+      .aggregate(refundPipeline);
+    const refundMap = new Map(
+      refundResults.map((r) => [
+        String(r._id),
+        Number(r.refundAmount.toString()),
+      ])
+    );
 
-    const result = await Order.aggregate(pipeline);
-    return (result || []).map((row) => ({
-      ...row,
-      periodType,
-      periodKey,
-      periodStart: start,
-      periodEnd: end,
-      // keep original Decimal128 field for backward compatibility
-      totalRevenueNumber: typeof row.totalRevenueDouble === "number" ? row.totalRevenueDouble : undefined,
-    }));
+    // 3. Merge
+    const merged = grossResults.map((g) => {
+      const empId = String(g._id);
+      const refund = refundMap.get(empId) || 0;
+      const gross = Number(g.grossRevenue.toString());
+      const net = gross - refund;
+      refundMap.delete(empId); // Mark as processed
+      return {
+        _id: g._id,
+        totalRevenue: net,
+        grossRevenue: gross,
+        totalRefundAmount: refund,
+        countOrders: g.countOrders,
+      };
+    });
+
+    // Add employees who only had refunds in this period (negative revenue)
+    refundMap.forEach((refund, empId) => {
+      merged.push({
+        _id:
+          empId === "null" || empId === "undefined" ? null : toObjectId(empId),
+        totalRevenue: -refund,
+        grossRevenue: 0,
+        totalRefundAmount: refund,
+        countOrders: 0,
+      });
+    });
+
+    const pipeline = [
+      { $match: { _id: { $in: merged.map((m) => m._id) } } }, // This is dummy just to use aggregate for lookup if needed
+    ];
+    // Actually, it's easier to just map and populate manually or use another aggregate.
+    // Let's use a simpler way since we have the merged array.
+
+    const finalData = [];
+    for (const item of merged) {
+      let employeeInfo = { fullName: "Chủ cửa hàng (Admin)", phone: "" };
+      if (item._id) {
+        const empDoc = await mongoose
+          .model("Employee")
+          .findById(item._id)
+          .select("fullName phone")
+          .lean();
+        if (empDoc) {
+          employeeInfo = { fullName: empDoc.fullName, phone: empDoc.phone };
+        } else {
+          employeeInfo = { fullName: "Nhân viên đã nghỉ", phone: "" };
+        }
+      }
+
+      finalData.push({
+        ...item,
+        totalRevenueDouble: item.totalRevenue,
+        avgOrderValue:
+          item.countOrders > 0 ? item.totalRevenue / item.countOrders : 0,
+        employeeInfo,
+        periodType,
+        periodKey,
+        periodStart: start,
+        periodEnd: end,
+      });
+    }
+
+    return finalData.sort((a, b) => b.totalRevenue - a.totalRevenue);
   }
 
   return [];
@@ -254,7 +504,9 @@ const getRevenueByEmployee = async (req, res) => {
     res.json({ message: "Báo cáo doanh thu theo nhân viên thành công", data });
   } catch (err) {
     console.error("Lỗi báo cáo doanh thu theo nhân viên:", err.message);
-    res.status(500).json({ message: "Lỗi server khi báo cáo doanh thu theo nhân viên" });
+    res
+      .status(500)
+      .json({ message: "Lỗi server khi báo cáo doanh thu theo nhân viên" });
   }
 };
 
@@ -267,10 +519,6 @@ const exportRevenue = async (req, res) => {
       return res.status(400).json({ message: "Thiếu periodType hoặc storeId" });
     }
 
-    if (format !== "xlsx") {
-      return res.status(400).json({ message: "Chỉ hỗ trợ xuất Excel (.xlsx)" });
-    }
-
     // LẤY CẢ 2 DỮ LIỆU
     const [totalData, empData] = await Promise.all([
       calcRevenueByPeriod({ storeId, periodType, periodKey, type: "total" }),
@@ -278,106 +526,271 @@ const exportRevenue = async (req, res) => {
     ]);
 
     const totalRow = totalData?.[0] || null;
-    const totalRevenueForShare = Number(totalRow?.totalRevenue || 0) || 0;
-    const periodStart = totalRow?.periodStart;
-    const periodEnd = totalRow?.periodEnd;
-    const periodStartText = periodStart ? dayjs(periodStart).format("DD/MM/YYYY") : "—";
-    const periodEndText = periodEnd ? dayjs(periodEnd).format("DD/MM/YYYY") : "—";
 
-    const wb = XLSX.utils.book_new();
+    if (format === "xlsx") {
+      const totalRevenueForShare = Number(totalRow?.totalRevenue || 0) || 0;
+      const periodStart = totalRow?.periodStart;
+      const periodEnd = totalRow?.periodEnd;
+      const periodStartText = periodStart
+        ? dayjs(periodStart).format("DD/MM/YYYY")
+        : "—";
+      const periodEndText = periodEnd
+        ? dayjs(periodEnd).format("DD/MM/YYYY")
+        : "—";
 
-    // Sheet 1: Tổng hợp
-    if (totalData && totalData.length > 0) {
-      const totalSheetData = totalData.map((item) => ({
-        "Loại kỳ": item.periodType,
-        "Mã kỳ": item.periodKey,
-        "Từ ngày": item.periodStart ? dayjs(item.periodStart).format("DD/MM/YYYY") : "—",
-        "Đến ngày": item.periodEnd ? dayjs(item.periodEnd).format("DD/MM/YYYY") : "—",
-        "Tổng doanh thu (VNĐ)": Number(item.totalRevenue),
-        "Số hóa đơn": item.countOrders,
-        "Số đơn hoàn tất": item.completedOrders || 0,
-        "Số đơn hoàn 1 phần": item.partialRefundOrders || 0,
-        "TB / hóa đơn (VNĐ)": Number(item.avgOrderValue || 0),
-      }));
-      const ws1 = XLSX.utils.json_to_sheet(totalSheetData);
-      ws1["!cols"] = [
-        { wch: 12 }, // Loại kỳ
-        { wch: 14 }, // Mã kỳ
-        { wch: 12 }, // Từ ngày
-        { wch: 12 }, // Đến ngày
-        { wch: 22 }, // Tổng doanh thu
-        { wch: 14 }, // Số hóa đơn
-        { wch: 16 }, // Hoàn tất
-        { wch: 18 }, // Hoàn 1 phần
-        { wch: 18 }, // TB/hóa đơn
-      ];
-      XLSX.utils.book_append_sheet(wb, ws1, "Tổng hợp");
-    }
+      const wb = XLSX.utils.book_new();
+      const reportTitle = "Báo cáo doanh thu chi tiết";
 
-    // Sheet 2: Nhân viên
-    if (empData && empData.length > 0) {
-      const empSheetData = empData.map((item) => ({
-        "Loại kỳ": item.periodType || periodType,
-        "Mã kỳ": item.periodKey || periodKey,
-        "Từ ngày": periodStartText,
-        "Đến ngày": periodEndText,
-        "Nhân viên": item.employeeInfo?.fullName || "Nhân viên đã nghỉ",
-        "Số điện thoại": item.employeeInfo?.phone || "—",
-        "Doanh thu (VNĐ)": Number(item.totalRevenueNumber ?? item.totalRevenueDouble ?? item.totalRevenue),
-        "Số hóa đơn": item.countOrders,
-        "TB / hóa đơn (VNĐ)": Number(item.avgOrderValue || 0),
-        "% tổng doanh thu":
-          totalRevenueForShare > 0
-            ? Number(((Number(item.totalRevenueNumber ?? item.totalRevenueDouble ?? item.totalRevenue) || 0) / totalRevenueForShare) * 100).toFixed(2)
-            : "0.00",
-      }));
-
-      const ws2 = XLSX.utils.json_to_sheet(empSheetData);
-      ws2["!cols"] = [
-        { wch: 12 }, // Loại kỳ
-        { wch: 14 }, // Mã kỳ
-        { wch: 12 }, // Từ ngày
-        { wch: 12 }, // Đến ngày
-        { wch: 28 }, // Nhân viên
-        { wch: 16 }, // Số điện thoại
-        { wch: 22 }, // Doanh thu
-        { wch: 14 }, // Số hóa đơn
-        { wch: 18 }, // TB/hóa đơn
-        { wch: 16 }, // % tổng doanh thu
-      ];
-
-      // Tô đậm header
-      const headerRange = XLSX.utils.decode_range(ws2["!ref"]);
-      for (let C = headerRange.s.c; C <= headerRange.e.c; ++C) {
-        const cellAddress = XLSX.utils.encode_cell({ r: 0, c: C });
-        if (!ws2[cellAddress]) continue;
-        ws2[cellAddress].s = {
-          font: { bold: true, color: { rgb: "FFFFFF" } },
-          fill: { fgColor: { rgb: "1890ff" } },
-          alignment: { horizontal: "center", vertical: "center" },
-        };
+      // Sheet 1: Tổng hợp
+      if (totalData && totalData.length > 0) {
+        const totalSheetData = totalData.map((item) => ({
+          "Loại kỳ": periodTypeToVietnamese(item.periodType),
+          "Mã kỳ": item.periodKey,
+          "Từ ngày": item.periodStart
+            ? dayjs(item.periodStart).format("DD/MM/YYYY")
+            : "—",
+          "Đến ngày": item.periodEnd
+            ? dayjs(item.periodEnd).format("DD/MM/YYYY")
+            : "—",
+          "Tổng doanh thu (VNĐ)": Number(item.totalRevenue),
+          "Số hóa đơn": item.countOrders,
+          "Số đơn hoàn tất": item.completedOrders || 0,
+          "Số đơn hoàn 1 phần": item.partialRefundOrders || 0,
+          "TB / hóa đơn (VNĐ)": Number(item.avgOrderValue || 0),
+        }));
+        const ws1 = createWorksheetWithReportHeader({
+          reportTitle,
+          req,
+          sheetData: totalSheetData,
+        });
+        ws1["!cols"] = [
+          { wch: 12 },
+          { wch: 14 },
+          { wch: 12 },
+          { wch: 12 },
+          { wch: 22 },
+          { wch: 14 },
+          { wch: 16 },
+          { wch: 18 },
+          { wch: 18 },
+        ];
+        XLSX.utils.book_append_sheet(wb, ws1, "Tổng hợp");
       }
 
-      XLSX.utils.book_append_sheet(wb, ws2, "Nhân viên");
+      // Sheet 2: Nhân viên
+      if (empData && empData.length > 0) {
+        const empSheetData = empData.map((item) => ({
+          "Loại kỳ": periodTypeToVietnamese(item.periodType || periodType),
+          "Mã kỳ": item.periodKey || periodKey,
+          "Từ ngày": periodStartText,
+          "Đến ngày": periodEndText,
+          "Nhân viên": item.employeeInfo?.fullName || "Nhân viên đã nghỉ",
+          "Số điện thoại": item.employeeInfo?.phone || "—",
+          "Doanh thu (VNĐ)": Number(
+            item.totalRevenueNumber ??
+              item.totalRevenueDouble ??
+              item.totalRevenue
+          ),
+          "Số hóa đơn": item.countOrders,
+          "TB / hóa đơn (VNĐ)": Number(item.avgOrderValue || 0),
+          "% tổng doanh thu":
+            totalRevenueForShare > 0
+              ? Number(
+                  ((Number(
+                    item.totalRevenueNumber ??
+                      item.totalRevenueDouble ??
+                      item.totalRevenue
+                  ) || 0) /
+                    totalRevenueForShare) *
+                    100
+                ).toFixed(2)
+              : "0.00",
+        }));
+
+        const ws2 = createWorksheetWithReportHeader({
+          reportTitle,
+          req,
+          sheetData: empSheetData,
+        });
+        ws2["!cols"] = [
+          { wch: 12 },
+          { wch: 14 },
+          { wch: 12 },
+          { wch: 12 },
+          { wch: 28 },
+          { wch: 16 },
+          { wch: 22 },
+          { wch: 14 },
+          { wch: 18 },
+          { wch: 16 },
+        ];
+        XLSX.utils.book_append_sheet(wb, ws2, "Nhân viên");
+      }
+
+      if (!totalData?.length && !empData?.length) {
+        return await sendEmptyNotificationWorkbook(
+          res,
+          "dữ liệu báo cáo",
+          req.store,
+          "Bao_Cao_Doanh_Thu"
+        );
+      }
+
+      const buffer = XLSX.write(wb, {
+        bookType: "xlsx",
+        type: "buffer",
+        cellStyles: true,
+      });
+      const fileName = buildExportFileName({
+        reportName: "Bao_Cao_Doanh_Thu",
+        req,
+        periodKey: periodKey || "hien_tai",
+      });
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName}"`
+      );
+      return res.send(buffer);
     }
 
-    if (!totalData?.length && !empData?.length) {
-      return res.status(404).json({ message: "Không có dữ liệu để xuất" });
+    if (format === "pdf") {
+      res.setHeader("Content-Type", "application/pdf");
+      const fileName = buildExportFileName({
+        reportName: "Bao_Cao_Doanh_Thu",
+        req,
+      });
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName.replace(".xlsx", ".pdf")}"`
+      );
+
+      const doc = new PDFDocument({ margin: 50, size: "A4" });
+      doc.pipe(res);
+
+      const fontPath = path.join(__dirname, "..", "fonts", "Roboto", "static");
+      doc.registerFont(
+        "Roboto-Regular",
+        path.join(fontPath, "Roboto-Regular.ttf")
+      );
+      doc.registerFont("Roboto-Bold", path.join(fontPath, "Roboto-Bold.ttf"));
+      doc.registerFont(
+        "Roboto-Italic",
+        path.join(fontPath, "Roboto-Italic.ttf")
+      );
+
+      // 1. Legal Header
+      doc
+        .font("Roboto-Bold")
+        .fontSize(10)
+        .text((req.store?.name || "Cửa hàng").toUpperCase(), { align: "left" });
+      doc.moveUp();
+      doc.text("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM", { align: "right" });
+      doc.text("Độc lập - Tự do - Hạnh phúc", { align: "right" });
+      doc
+        .fontSize(9)
+        .font("Roboto-Italic")
+        .text("-----------------", { align: "right" });
+      doc.moveDown(2);
+
+      // 2. Title
+      doc
+        .font("Roboto-Bold")
+        .fontSize(18)
+        .text("BÁO CÁO DOANH THU CHI TIẾT", { align: "center" });
+      doc
+        .font("Roboto-Italic")
+        .fontSize(11)
+        .text(
+          `Kỳ báo cáo: ${periodKey || "Hiện tại"} (${periodTypeToVietnamese(
+            periodType
+          )})`,
+          { align: "center" }
+        );
+      doc.moveDown(2);
+
+      // 3. Info
+      doc
+        .font("Roboto-Regular")
+        .fontSize(10)
+        .text(`Người xuất: ${getExporterNameDisplay(req)}`);
+      doc.text(`Ngày xuất: ${dayjs().format("DD/MM/YYYY HH:mm")}`);
+      doc.moveDown(1);
+      doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
+      doc.moveDown(1);
+
+      // 4. Content - Summary
+      doc.font("Roboto-Bold").fontSize(12).text("TỔNG HỢP CHUNG");
+      doc.font("Roboto-Regular").fontSize(10);
+      if (totalRow) {
+        doc.text(
+          `Tổng doanh thu: ${new Intl.NumberFormat("vi-VN").format(
+            totalRow.totalRevenue
+          )} VND`
+        );
+        doc.text(`Số hóa đơn: ${totalRow.countOrders}`);
+        doc.text(
+          `Giá trị trung bình/đơn: ${new Intl.NumberFormat("vi-VN").format(
+            totalRow.avgOrderValue
+          )} VND`
+        );
+      }
+      doc.moveDown(2);
+
+      // 5. Content - Employee breakdown
+      if (empData && empData.length > 0) {
+        doc.font("Roboto-Bold").fontSize(12).text("CHI TIẾT THEO NHÂN VIÊN");
+        doc.moveDown(0.5);
+        empData.forEach((emp, idx) => {
+          doc
+            .font("Roboto-Regular")
+            .fontSize(10)
+            .text(
+              `${idx + 1}. ${
+                emp.employeeInfo?.fullName || "N/A"
+              }: ${new Intl.NumberFormat("vi-VN").format(
+                emp.totalRevenueNumber ?? emp.totalRevenue
+              )} VND (${emp.countOrders} đơn)`
+            );
+        });
+      }
+
+      doc.moveDown(3);
+
+      // 6. Signatures
+      const startY = doc.y > 650 ? (doc.addPage(), 50) : doc.y;
+      doc
+        .font("Roboto-Bold")
+        .text("Người lập biểu", 50, startY, { width: 150, align: "center" });
+      doc.text("Kế toán trưởng", 220, startY, { width: 150, align: "center" });
+      doc.text("Chủ hộ kinh doanh", 390, startY, {
+        width: 150,
+        align: "center",
+      });
+
+      doc
+        .font("Roboto-Italic")
+        .fontSize(9)
+        .text("(Ký, họ tên)", 50, doc.y, { width: 150, align: "center" });
+      doc.moveUp();
+      doc.text("(Ký, họ tên)", 220, doc.y, { width: 150, align: "center" });
+      doc.moveUp();
+      doc.text("(Ký, họ tên, đóng dấu)", 390, doc.y, {
+        width: 150,
+        align: "center",
+      });
+
+      doc.end();
+      return;
     }
 
-    const buffer = XLSX.write(wb, { bookType: "xlsx", type: "buffer" });
-
-    const fileName = buildExportFileName({
-      reportName: "Bao_Cao_Doanh_Thu",
-      req,
-      periodKey: periodKey || "hien_tai",
-    });
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-    res.send(buffer);
+    res.status(400).json({ message: "Format không hỗ trợ" });
   } catch (err) {
     console.error("Lỗi export báo cáo doanh thu:", err);
-    res.status(500).json({ message: "Lỗi server khi xuất Excel" });
+    res.status(500).json({ message: "Lỗi server khi xuất báo cáo" });
   }
 };
 
@@ -401,7 +814,7 @@ const getRevenueSummaryByYear = async (req, res) => {
 
     const orderMatch = {
       storeId: toObjectId(storeId),
-      status: { $in: PAID_STATUSES },
+      status: { $in: ["paid", "partially_refunded", "refunded"] },
       createdAt: { $gte: start, $lte: end },
     };
 
@@ -412,21 +825,41 @@ const getRevenueSummaryByYear = async (req, res) => {
         { $match: orderMatch },
         {
           $group: {
-            _id: { month: { $month: "$createdAt" } },
-            revenue: { $sum: { $toDecimal: "$totalAmount" } },
+            _id: {
+              month: {
+                $month: { date: "$createdAt", timezone: "Asia/Ho_Chi_Minh" },
+              },
+            },
+            grossRevenue: { $sum: { $toDecimal: "$totalAmount" } },
           },
         },
+        { $sort: { "_id.month": 1 } },
+      ]),
+      mongoose.model("OrderRefund").aggregate([
+        { $match: { refundedAt: { $gte: start, $lte: end } } },
         {
-          $project: {
-            _id: 0,
-            month: "$_id.month",
-            revenue: { $toDouble: "$revenue" },
+          $lookup: {
+            from: "orders",
+            localField: "orderId",
+            foreignField: "_id",
+            as: "orderInfo",
           },
         },
-        { $sort: { month: 1 } },
+        { $unwind: "$orderInfo" },
+        { $match: { "orderInfo.storeId": toObjectId(storeId) } },
+        {
+          $group: {
+            _id: {
+              month: {
+                $month: { date: "$refundedAt", timezone: "Asia/Ho_Chi_Minh" },
+              },
+            },
+            refundAmount: { $sum: { $toDecimal: "$refundAmount" } },
+          },
+        },
       ]),
       OrderItem.aggregate([
-        // Join Order để lọc theo store/status/createdAt (OrderItem chỉ có orderId)
+        // ... qty logic stays mostly same but needs to subtract refunded qty ...
         {
           $lookup: {
             from: "orders",
@@ -439,42 +872,93 @@ const getRevenueSummaryByYear = async (req, res) => {
         {
           $match: {
             "order.storeId": toObjectId(storeId),
-            "order.status": { $in: PAID_STATUSES },
+            "order.status": { $in: ["paid", "partially_refunded", "refunded"] },
             "order.createdAt": { $gte: start, $lte: end },
           },
         },
         {
           $group: {
-            _id: { month: { $month: "$order.createdAt" } },
+            _id: {
+              month: {
+                $month: {
+                  date: "$order.createdAt",
+                  timezone: "Asia/Ho_Chi_Minh",
+                },
+              },
+            },
             itemsSold: { $sum: "$quantity" },
           },
         },
+        { $sort: { "_id.month": 1 } },
+      ]),
+      mongoose.model("OrderRefund").aggregate([
+        { $match: { refundedAt: { $gte: start, $lte: end } } },
         {
-          $project: {
-            _id: 0,
-            month: "$_id.month",
-            itemsSold: 1,
+          $lookup: {
+            from: "orders",
+            localField: "orderId",
+            foreignField: "_id",
+            as: "orderInfo",
           },
         },
-        { $sort: { month: 1 } },
+        { $unwind: "$orderInfo" },
+        { $match: { "orderInfo.storeId": toObjectId(storeId) } },
+        { $unwind: "$refundItems" },
+        {
+          $group: {
+            _id: {
+              month: {
+                $month: { date: "$refundedAt", timezone: "Asia/Ho_Chi_Minh" },
+              },
+            },
+            itemsRefunded: { $sum: "$refundItems.quantity" },
+          },
+        },
       ]),
     ]);
 
-    const revenueMap = new Map((revenueByMonth || []).map((r) => [r.month, safeNumber(r.revenue)]));
-    const qtyMap = new Map((qtyByMonth || []).map((r) => [r.month, safeNumber(r.itemsSold)]));
+    const revenueMap = new Map(
+      (revenueByMonth || []).map((r) => [
+        r._id.month,
+        safeNumber(r.grossRevenue.toString()),
+      ])
+    );
+    const refundMap = new Map(
+      (refundByMonth || []).map((r) => [
+        r._id.month,
+        safeNumber(r.refundAmount.toString()),
+      ])
+    );
+    const qtyMap = new Map(
+      (qtyByMonth || []).map((r) => [r._id.month, safeNumber(r.itemsSold)])
+    );
+    const qtyRefundMap = new Map(
+      (qtyRefundByMonth || []).map((r) => [
+        r._id.month,
+        safeNumber(r.itemsRefunded),
+      ])
+    );
 
-    // Xuất đủ 12 tháng: tháng không có dữ liệu -> 0 (đúng format template tổng hợp)
+    // Xuất đủ 12 tháng
     const rows = Array.from({ length: 12 }, (_, idx) => {
       const month = idx + 1;
+      const gross = revenueMap.get(month) || 0;
+      const refund = refundMap.get(month) || 0;
+      const qSold = qtyMap.get(month) || 0;
+      const qRefund = qtyRefundMap.get(month) || 0;
       return {
         time: `Tháng ${month}`,
+        monthNo: month,
         year,
-        itemsSold: qtyMap.get(month) || 0,
-        revenue: revenueMap.get(month) || 0,
+        itemsSold: qSold - qRefund,
+        revenue: gross - refund,
       };
     });
 
-    return res.json({ message: "Báo cáo tổng hợp doanh thu theo năm", data: rows });
+    return res.json({
+      message: "Báo cáo tổng hợp doanh thu theo năm",
+      data: rows,
+    });
   } catch (err) {
     console.error("Lỗi báo cáo tổng hợp doanh thu theo năm:", err);
     return res.status(500).json({ message: "Lỗi server khi báo cáo tổng hợp" });
@@ -518,15 +1002,129 @@ const exportRevenueSummaryByYear = async (req, res) => {
       "Doanh thu (VNĐ)": r.revenue,
     }));
 
-    const ws = XLSX.utils.json_to_sheet(sheetData);
+    const ws = createWorksheetWithReportHeader({
+      reportTitle: "Báo cáo doanh thu bán hàng tổng",
+      req,
+      sheetData,
+    });
     ws["!cols"] = [{ wch: 16 }, { wch: 10 }, { wch: 20 }, { wch: 18 }];
     XLSX.utils.book_append_sheet(wb, ws, "Báo cáo doanh thu bán hàng tổng");
 
-    const buffer = XLSX.write(wb, { bookType: "xlsx", type: "buffer" });
-    const fileName = buildExportFileName({ reportName: "Bao_Cao_Doanh_Thu_Tong_Hop", req });
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-    return res.send(buffer);
+    if (format === "xlsx") {
+      const buffer = XLSX.write(wb, {
+        bookType: "xlsx",
+        type: "buffer",
+        cellStyles: true,
+      });
+      const fileName = buildExportFileName({
+        reportName: "Bao_Cao_Doanh_Thu_Tong_Hop",
+        req,
+      });
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName}"`
+      );
+      return res.send(buffer);
+    }
+
+    if (format === "pdf") {
+      res.setHeader("Content-Type", "application/pdf");
+      const fileName = buildExportFileName({
+        reportName: "Bao_Cao_Doanh_Thu_Tong_Hop",
+        req,
+      });
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName.replace(".xlsx", ".pdf")}"`
+      );
+
+      const doc = new PDFDocument({ margin: 50, size: "A4" });
+      doc.pipe(res);
+
+      const fontPath = path.join(__dirname, "..", "fonts", "Roboto", "static");
+      doc.registerFont(
+        "Roboto-Regular",
+        path.join(fontPath, "Roboto-Regular.ttf")
+      );
+      doc.registerFont("Roboto-Bold", path.join(fontPath, "Roboto-Bold.ttf"));
+      doc.registerFont(
+        "Roboto-Italic",
+        path.join(fontPath, "Roboto-Italic.ttf")
+      );
+
+      // Legal Header
+      doc
+        .font("Roboto-Bold")
+        .fontSize(10)
+        .text((req.store?.name || "Cửa hàng").toUpperCase(), { align: "left" });
+      doc.moveUp();
+      doc.text("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM", { align: "right" });
+      doc.text("Độc lập - Tự do - Hạnh phúc", { align: "right" });
+      doc
+        .fontSize(9)
+        .font("Roboto-Italic")
+        .text("-----------------", { align: "right" });
+      doc.moveDown(2);
+
+      // Title
+      doc
+        .font("Roboto-Bold")
+        .fontSize(18)
+        .text("BÁO CÁO DOANH THU TỔNG HỢP", { align: "center" });
+      doc
+        .font("Roboto-Italic")
+        .fontSize(11)
+        .text(`Năm: ${year}`, { align: "center" });
+      doc.moveDown(2);
+
+      // Info
+      doc
+        .font("Roboto-Regular")
+        .fontSize(10)
+        .text(`Người xuất: ${getExporterNameDisplay(req)}`);
+      doc.text(`Ngày xuất: ${dayjs().format("DD/MM/YYYY HH:mm")}`);
+      doc.moveDown(1);
+      doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
+      doc.moveDown(1);
+
+      // Data
+      rows.forEach((r, idx) => {
+        doc
+          .font("Roboto-Bold")
+          .fontSize(11)
+          .text(`${idx + 1}. Tháng ${r.monthLabel || ""}`);
+        doc.font("Roboto-Regular").fontSize(10);
+        doc.text(`   Sản phẩm bán ra: ${safeNumber(r.itemsSold)}`, {
+          indent: 20,
+        });
+        doc.text(
+          `   Doanh thu: ${new Intl.NumberFormat("vi-VN").format(
+            safeNumber(r.totalRevenue)
+          )} VND`,
+          { indent: 20 }
+        );
+        doc.moveDown(0.5);
+      });
+
+      doc.moveDown(2);
+      // Signatures
+      const startY = doc.y > 650 ? (doc.addPage(), 50) : doc.y;
+      doc
+        .font("Roboto-Bold")
+        .fontSize(10)
+        .text("Người lập biểu", 50, startY, { width: 150, align: "center" });
+      doc.text("Chủ hộ kinh doanh", 390, startY, {
+        width: 150,
+        align: "center",
+      });
+
+      doc.end();
+      return;
+    }
   } catch (err) {
     console.error("Lỗi export báo cáo tổng hợp:", err);
     return res.status(500).json({ message: "Lỗi server khi xuất Excel" });
@@ -546,99 +1144,174 @@ const getDailyProductSales = async (req, res) => {
     const date = req.query.date; // YYYY-MM-DD
 
     if (!storeId || !date) {
-      return res.status(400).json({ message: "Thiếu storeId hoặc date (YYYY-MM-DD)" });
+      return res
+        .status(400)
+        .json({ message: "Thiếu storeId hoặc date (YYYY-MM-DD)" });
     }
 
     const { start, end } = periodToRange("day", date);
 
-    const rows = await OrderItem.aggregate([
-      // Join Order để lọc theo store/status/createdAt
-      {
-        $lookup: {
-          from: "orders",
-          localField: "orderId",
-          foreignField: "_id",
-          as: "order",
-        },
-      },
-      { $unwind: "$order" },
-      {
-        $match: {
-          "order.storeId": toObjectId(storeId),
-          "order.status": { $in: PAID_STATUSES },
-          "order.createdAt": { $gte: start, $lte: end },
-        },
-      },
-      // Join Product để lấy mã hàng / tên / mô tả
-      {
-        $lookup: {
-          from: "products",
-          localField: "productId",
-          foreignField: "_id",
-          as: "product",
-        },
-      },
-      { $unwind: "$product" },
-      {
-        $addFields: {
-          // grossLine = đơn giá tại thời điểm bán * số lượng
-          // netLine   = subtotal đã lưu (thường là số tiền thực thu của line)
-          grossLine: { $multiply: [{ $toDouble: "$priceAtTime" }, "$quantity"] },
-          netLine: { $toDouble: "$subtotal" },
-          unitPrice: { $toDouble: "$priceAtTime" },
-        },
-      },
-      {
-        $group: {
-          // Gom theo productId để ra 1 dòng / sản phẩm
-          _id: "$productId",
-          sku: { $first: "$product.sku" },
-          name: { $first: "$product.name" },
-          description: { $first: "$product.description" },
-          qty: { $sum: "$quantity" },
-          grossTotal: { $sum: "$grossLine" },
-          netTotal: { $sum: "$netLine" },
-          // store the sum of unitPrice*qty for recomputing avg unit price
-          unitPriceQtySum: { $sum: "$grossLine" },
-        },
-      },
-      {
-        $addFields: {
-          // Đơn giá trung bình theo trọng số số lượng
-          unitPriceAvg: {
-            $cond: [{ $gt: ["$qty", 0] }, { $divide: ["$unitPriceQtySum", "$qty"] }, 0],
+    const [salesRows, refundRows, dailyDiscountAgg] = await Promise.all([
+      OrderItem.aggregate([
+        {
+          $lookup: {
+            from: "orders",
+            localField: "orderId",
+            foreignField: "_id",
+            as: "order",
           },
-          // Tổng giảm = max(0, gross - net)
-          discountAmount: { $max: [0, { $subtract: ["$grossTotal", "$netTotal"] }] },
         },
-      },
-      { $sort: { netTotal: -1 } },
+        { $unwind: "$order" },
+        {
+          $match: {
+            "order.storeId": toObjectId(storeId),
+            "order.status": { $in: PAID_STATUSES },
+            "order.createdAt": { $gte: start, $lte: end },
+          },
+        },
+        {
+          $lookup: {
+            from: "products",
+            localField: "productId",
+            foreignField: "_id",
+            as: "product",
+          },
+        },
+        { $unwind: "$product" },
+        {
+          $addFields: {
+            grossLine: {
+              $multiply: [{ $toDouble: "$priceAtTime" }, "$quantity"],
+            },
+            netLine: { $toDouble: "$subtotal" },
+            vatLine: { $toDouble: { $ifNull: ["$vat_amount", 0] } },
+          },
+        },
+        {
+          $group: {
+            _id: "$productId",
+            sku: { $first: "$product.sku" },
+            name: { $first: "$product.name" },
+            description: { $first: "$product.description" },
+            qty: { $sum: "$quantity" },
+            grossTotal: { $sum: "$grossLine" },
+            netTotal: { $sum: "$netLine" },
+            vatTotal: { $sum: "$vatLine" },
+          },
+        },
+      ]),
+      mongoose.model("OrderRefund").aggregate([
+        { $match: { refundedAt: { $gte: start, $lte: end } } },
+        {
+          $lookup: {
+            from: "orders",
+            localField: "orderId",
+            foreignField: "_id",
+            as: "orderInfo",
+          },
+        },
+        { $unwind: "$orderInfo" },
+        { $match: { "orderInfo.storeId": toObjectId(storeId) } },
+        { $unwind: "$refundItems" },
+        {
+          $group: {
+            _id: "$refundItems.productId",
+            refundedQty: { $sum: "$refundItems.quantity" },
+            refundedAmount: { $sum: { $toDecimal: "$refundItems.subtotal" } },
+            refundedVAT: {
+              $sum: { $toDecimal: { $ifNull: ["$refundItems.vatAmount", 0] } },
+            },
+          },
+        },
+      ]),
+      // MỚI: Tính tổng giảm giá cấp Order trong ngày
+      Order.aggregate([
+        {
+          $match: {
+            storeId: toObjectId(storeId),
+            status: { $in: ["paid", "partially_refunded", "refunded"] },
+            createdAt: { $gte: start, $lte: end },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            totalDiscount: { $sum: { $toDouble: "$discountAmount" } },
+          },
+        },
+      ]),
     ]);
 
-    const data = (rows || []).map((r) => {
-      const gross = safeNumber(r.grossTotal);
-      const net = safeNumber(r.netTotal);
+    const totalDailyDiscount = dailyDiscountAgg[0]?.totalDiscount || 0;
 
-      // Giảm giá (ước tính): phần chênh lệch giữa tổng trước giảm (gross) và subtotal thực thu (net)
-      const discount = Math.max(0, gross - net);
-      const discountPct = gross > 0 ? (discount / gross) * 100 : 0;
+    const refundMap = new Map(refundRows.map((r) => [String(r._id), r]));
+
+    // Merge
+    const mergedData = salesRows.map((s) => {
+      const ref = refundMap.get(String(s._id));
+      const rQty = ref ? ref.refundedQty : 0;
+      const rAmt = ref ? Number(ref.refundedAmount.toString()) : 0;
+      // rVat might be needed if you want "Real revenue" that includes VAT
+      const rVat = ref ? Number(ref.refundedVAT.toString()) : 0;
+
+      const finalQty = s.qty - rQty;
+
+      // Tính tỷ lệ thực bán để điều chỉnh GrossTotal hiển thị
+      let ratio = 1;
+      if (s.qty > 0) {
+        ratio = Math.max(0, finalQty / s.qty);
+      }
+      const adjustedGross = s.grossTotal * ratio;
+
+      // Net total item = (Subtotal - RefundSubtotal) + (VAT - RefundVAT)
+      const finalNet = s.netTotal - rAmt + ((s.vatTotal || 0) - rVat);
+
+      refundMap.delete(String(s._id));
+
       return {
-        sku: r.sku || "",
-        productName: r.name || "",
-        productDescription: r.description || "",
-        unitPrice: safeNumber(r.unitPriceAvg),
-        quantity: safeNumber(r.qty),
-        grossTotal: gross,
-        discountPercent: Number(discountPct.toFixed(2)),
-        discountAmount: discount,
-        netTotal: net,
+        sku: s.sku || "",
+        productName: s.name || "",
+        productDescription: s.description || "",
+        unitPrice: s.qty > 0 ? s.grossTotal / s.qty : 0,
+        quantity: finalQty,
+        grossTotal: adjustedGross, // Hiển thị doanh thu tương ứng với số lượng thực bán
+        // discountAmount: 0,
+        netTotal: finalNet, // Thực thu của item (đã trừ hoàn, bao gồm VAT, chưa trừ discount order)
       };
     });
 
-    return res.json({ message: "Báo cáo bán hàng theo ngày", date, data });
+    // Add items that were ONLY refunded today (negative sales)
+    for (const [prodId, r] of refundMap) {
+      const prod = await mongoose
+        .model("Product")
+        .findById(prodId)
+        .select("name sku description")
+        .lean();
+      mergedData.push({
+        sku: prod?.sku || "",
+        productName: prod?.name || "Sản phẩm đã xóa",
+        productDescription: prod?.description || "",
+        unitPrice: 0,
+        quantity: -r.refundedQty,
+        grossTotal: 0,
+        discountAmount: 0,
+        netTotal: -(
+          Number(r.refundedAmount.toString()) + Number(r.refundedVAT.toString())
+        ),
+      });
+    }
+
+    return res.json({
+      message: "Báo cáo bán hàng theo ngày thành công",
+      date,
+      data: mergedData,
+      totalDailyDiscount, // Trả thêm tổng giảm giá
+    });
   } catch (err) {
     console.error("Lỗi báo cáo bán hàng theo ngày:", err);
-    return res.status(500).json({ message: "Lỗi server khi báo cáo bán hàng theo ngày" });
+    return res
+      .status(500)
+      .json({ message: "Lỗi server khi báo cáo bán hàng theo ngày" });
   }
 };
 
@@ -649,52 +1322,227 @@ const exportDailyProductSales = async (req, res) => {
     const { format = "xlsx" } = req.query;
 
     if (!storeId || !date) {
-      return res.status(400).json({ message: "Thiếu storeId hoặc date (YYYY-MM-DD)" });
+      return res
+        .status(400)
+        .json({ message: "Thiếu storeId hoặc date (YYYY-MM-DD)" });
     }
-    if (format !== "xlsx") {
-      return res.status(400).json({ message: "Chỉ hỗ trợ xuất Excel (.xlsx)" });
+    if (format !== "xlsx" && format !== "pdf") {
+      return res
+        .status(400)
+        .json({ message: "Chỉ hỗ trợ xuất Excel (.xlsx) hoặc PDF (.pdf)" });
     }
 
-    // Call logic JSON -> map lại theo đúng header template
     let rows;
+    let totalDailyDiscount = 0;
     await getDailyProductSales(
       { query: { storeId, date } },
       {
-        json: ({ data }) => {
-          rows = data;
+        json: (resData) => {
+          rows = resData.data;
+          totalDailyDiscount = resData.totalDailyDiscount || 0;
         },
         status: () => ({ json: () => {} }),
       }
     );
 
-    rows = Array.isArray(rows) ? rows : [];
-    if (!rows.length) {
+    const allRows = Array.isArray(rows) ? rows : [];
+
+    // Tính tổng tất cả (cả âm) để số liệu chính xác
+    const sumGross = allRows.reduce((a, b) => a + Number(b.grossTotal || 0), 0);
+    const sumNetItems = allRows.reduce(
+      (a, b) => a + Number(b.netTotal || 0),
+      0
+    );
+    const finalRevenue = sumNetItems - totalDailyDiscount;
+
+    // Filter cho hiển thị (giống giao diện)
+    const displayRows = allRows.filter((r) => r.quantity > 0);
+
+    if (!displayRows.length) {
       return res.status(404).json({ message: "Không có dữ liệu để xuất" });
     }
 
     const wb = XLSX.utils.book_new();
-    const sheetData = rows.map((r) => ({
+    const sheetData = displayRows.map((r) => ({
       "Mã hàng": r.sku,
       "Tên sản phẩm": r.productName,
       "Mô tả": r.productDescription,
       "Đơn giá (VNĐ)": r.unitPrice,
       "Số lượng": r.quantity,
       "Tổng (VNĐ)": r.grossTotal,
-      "Tổng giảm (VNĐ)": r.discountAmount,
+      // "Tổng giảm (VNĐ)": r.discountAmount, // Bỏ cột này
       "Thực thu (VNĐ)": r.netTotal,
     }));
 
-    const ws = XLSX.utils.json_to_sheet(sheetData);
-    ws["!cols"] = [{ wch: 14 }, { wch: 26 }, { wch: 34 }, { wch: 12 }, { wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
+    // Thêm dòng tổng kết vào cuối sheetData cho Excel
+    sheetData.push(
+      {
+        "Mã hàng": "",
+        "Tên sản phẩm": "",
+        "Mô tả": "",
+        "Đơn giá (VNĐ)": "",
+        "Số lượng": "",
+        "Tổng (VNĐ)": "",
+        "Thực thu (VNĐ)": "",
+      }, // Dòng trống
+      {
+        "Mã hàng": "",
+        "Tên sản phẩm": "TỔNG CỘNG",
+        "Mô tả": "",
+        "Đơn giá (VNĐ)": "",
+        "Số lượng": "",
+        "Tổng (VNĐ)": sumGross,
+        "Thực thu (VNĐ)": sumNetItems,
+      },
+      {
+        "Mã hàng": "",
+        "Tên sản phẩm": "GIẢM GIÁ HÓA ĐƠN",
+        "Mô tả": "",
+        "Đơn giá (VNĐ)": "",
+        "Số lượng": "",
+        "Tổng (VNĐ)": "",
+        "Thực thu (VNĐ)": -totalDailyDiscount,
+      },
+      {
+        "Mã hàng": "",
+        "Tên sản phẩm": "DOANH THU THỰC TẾ",
+        "Mô tả": "",
+        "Đơn giá (VNĐ)": "",
+        "Số lượng": "",
+        "Tổng (VNĐ)": "",
+        "Thực thu (VNĐ)": finalRevenue,
+      }
+    );
+
+    const ws = createWorksheetWithReportHeader({
+      reportTitle: "Báo cáo bán hàng hằng ngày",
+      req,
+      sheetData,
+    });
+    ws["!cols"] = [
+      { wch: 14 },
+      { wch: 26 },
+      { wch: 34 },
+      { wch: 12 },
+      { wch: 10 },
+      { wch: 14 },
+      // { wch: 14 }, // Discount col removed
+      { wch: 18 },
+    ];
 
     // Tên sheet Excel bị giới hạn 31 ký tự; dùng tên ngắn để tránh lỗi khi export.
     XLSX.utils.book_append_sheet(wb, ws, "Bán hàng hằng ngày");
 
-    const buffer = XLSX.write(wb, { bookType: "xlsx", type: "buffer" });
-    const fileName = buildExportFileName({ reportName: "Bao_Cao_Ban_Hang_Hang_Ngay", req });
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-    return res.send(buffer);
+    if (format === "xlsx") {
+      const buffer = XLSX.write(wb, {
+        bookType: "xlsx",
+        type: "buffer",
+        cellStyles: true,
+      });
+      const fileName = buildExportFileName({
+        reportName: "Bao_Cao_Ban_Hang_Hang_Ngay",
+        req,
+      });
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName}"`
+      );
+      return res.send(buffer);
+    }
+
+    if (format === "pdf") {
+      res.setHeader("Content-Type", "application/pdf");
+      const fileName = buildExportFileName({
+        reportName: "Bao_Cao_Ban_Hang_Hang_Ngay",
+        req,
+      });
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName.replace(".xlsx", ".pdf")}"`
+      );
+
+      const doc = new PDFDocument({ margin: 50, size: "A4" });
+      doc.pipe(res);
+
+      const fontPath = path.join(__dirname, "..", "fonts", "Roboto", "static");
+      doc.registerFont(
+        "Roboto-Regular",
+        path.join(fontPath, "Roboto-Regular.ttf")
+      );
+      doc.registerFont("Roboto-Bold", path.join(fontPath, "Roboto-Bold.ttf"));
+      doc.registerFont(
+        "Roboto-Italic",
+        path.join(fontPath, "Roboto-Italic.ttf")
+      );
+
+      // 1. Legal Header
+      doc
+        .font("Roboto-Bold")
+        .fontSize(10)
+        .text((req.store?.name || "Cửa hàng").toUpperCase(), { align: "left" });
+      doc.moveUp();
+      doc.text("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM", { align: "right" });
+      doc.text("Độc lập - Tự do - Hạnh phúc", { align: "right" });
+      doc
+        .fontSize(9)
+        .font("Roboto-Italic")
+        .text("-----------------", { align: "right" });
+      doc.moveDown(2);
+
+      // 2. Title
+      doc
+        .font("Roboto-Bold")
+        .fontSize(18)
+        .text("BÁO CÁO BÁN HÀNG HẰNG NGÀY", { align: "center" });
+      doc
+        .font("Roboto-Regular")
+        .fontSize(11)
+        .text(`Ngày: ${date}`, { align: "center" });
+      doc.moveDown(2);
+
+      // 3. List Items
+      displayRows.forEach((r, idx) => {
+        const net = new Intl.NumberFormat("vi-VN").format(r.netTotal);
+        const gross = new Intl.NumberFormat("vi-VN").format(r.grossTotal);
+        doc
+          .font("Roboto-Bold")
+          .fontSize(10)
+          .text(`${idx + 1}. ${r.productName} (${r.sku})`);
+        doc
+          .font("Roboto-Regular")
+          .text(
+            `   SL: ${r.quantity} | Đơn giá: ${new Intl.NumberFormat(
+              "vi-VN"
+            ).format(r.unitPrice)} | Tổng: ${gross} | Thực thu: ${net} VND`
+          );
+        doc.moveDown(0.3);
+      });
+
+      doc.moveDown(1);
+      doc.stroke(); // Draw line
+      doc.moveDown(1);
+
+      // 4. Summary Footer
+      const fmt = (n) => new Intl.NumberFormat("vi-VN").format(n);
+
+      doc.font("Roboto-Bold").fontSize(11);
+      doc.text(`TỔNG DOANH THU: ${fmt(sumGross)} VND`, { align: "right" });
+      doc.text(`GIẢM GIÁ HÓA ĐƠN: -${fmt(totalDailyDiscount)} VND`, {
+        align: "right",
+        color: "red",
+      });
+      doc.fontSize(12).text(`THỰC THU: ${fmt(finalRevenue)} VND`, {
+        align: "right",
+        color: "blue",
+      });
+
+      doc.end();
+      return;
+    }
   } catch (err) {
     console.error("Lỗi export báo cáo bán hàng theo ngày:", err);
     return res.status(500).json({ message: "Lỗi server khi xuất Excel" });
@@ -733,8 +1581,16 @@ const getYearlyCategoryCompare = async (req, res) => {
       {
         $match: {
           "order.storeId": toObjectId(storeId),
-          "order.status": { $in: PAID_STATUSES },
+          "order.status": { $in: ["paid", "partially_refunded"] },
           "order.createdAt": { $gte: start, $lte: end },
+        },
+      },
+      // Filter: Chỉ lấy sản phẩm chưa bị hoàn hết (quantity > refundedQuantity)
+      {
+        $match: {
+          $expr: {
+            $gt: ["$quantity", { $ifNull: ["$refundedQuantity", 0] }],
+          },
         },
       },
       // Join Product -> lấy group_id
@@ -758,11 +1614,27 @@ const getYearlyCategoryCompare = async (req, res) => {
       },
       {
         $addFields: {
+          // groupName: ... (no change in this block start)
           groupName: {
             $ifNull: [{ $arrayElemAt: ["$group.name", 0] }, "(Chưa phân nhóm)"],
           },
-          orderYear: { $year: "$order.createdAt" },
-          netLine: { $toDouble: "$subtotal" },
+          orderYear: {
+            $year: { date: "$order.createdAt", timezone: "Asia/Ho_Chi_Minh" },
+          },
+          // Fix: Net Revenue = (quantity - refundedQuantity) * priceAtTime
+          netLine: {
+            $toDouble: {
+              $multiply: [
+                {
+                  $subtract: [
+                    "$quantity",
+                    { $ifNull: ["$refundedQuantity", 0] },
+                  ],
+                },
+                "$priceAtTime",
+              ],
+            },
+          },
         },
       },
       {
@@ -824,7 +1696,12 @@ const getYearlyCategoryCompare = async (req, res) => {
       { $sort: { revenueThisYear: -1 } },
     ]);
 
-    return res.json({ message: "So sánh doanh số hằng năm", year, prevYear, data: rows || [] });
+    return res.json({
+      message: "So sánh doanh số hằng năm",
+      year,
+      prevYear,
+      data: rows || [],
+    });
   } catch (err) {
     console.error("Lỗi so sánh doanh số hằng năm:", err);
     return res.status(500).json({ message: "Lỗi server khi so sánh doanh số" });
@@ -871,15 +1748,118 @@ const exportYearlyCategoryCompare = async (req, res) => {
       "Tổng 2 năm": safeNumber(r.totalTwoYears),
     }));
 
-    const ws = XLSX.utils.json_to_sheet(sheetData);
-    ws["!cols"] = [{ wch: 28 }, { wch: 18 }, { wch: 18 }, { wch: 16 }, { wch: 16 }];
+    const ws = createWorksheetWithReportHeader({
+      reportTitle: "So sánh doanh số hằng năm",
+      req,
+      sheetData,
+    });
+    ws["!cols"] = [
+      { wch: 28 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 16 },
+      { wch: 16 },
+    ];
     XLSX.utils.book_append_sheet(wb, ws, "So sánh doanh số hằng năm");
 
-    const buffer = XLSX.write(wb, { bookType: "xlsx", type: "buffer" });
-    const fileName = buildExportFileName({ reportName: "So_Sanh_Doanh_So_Hang_Nam", req });
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-    return res.send(buffer);
+    if (format === "xlsx") {
+      const buffer = XLSX.write(wb, {
+        bookType: "xlsx",
+        type: "buffer",
+        cellStyles: true,
+      });
+      const fileName = buildExportFileName({
+        reportName: "So_Sanh_Doanh_So_Hang_Nam",
+        req,
+      });
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName}"`
+      );
+      return res.send(buffer);
+    }
+
+    if (format === "pdf") {
+      res.setHeader("Content-Type", "application/pdf");
+      const fileName = buildExportFileName({
+        reportName: "So_Sanh_Doanh_So_Hang_Nam",
+        req,
+      });
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName.replace(".xlsx", ".pdf")}"`
+      );
+
+      const doc = new PDFDocument({ margin: 50, size: "A4" });
+      doc.pipe(res);
+
+      const fontPath = path.join(__dirname, "..", "fonts", "Roboto", "static");
+      doc.registerFont(
+        "Roboto-Regular",
+        path.join(fontPath, "Roboto-Regular.ttf")
+      );
+      doc.registerFont("Roboto-Bold", path.join(fontPath, "Roboto-Bold.ttf"));
+      doc.registerFont(
+        "Roboto-Italic",
+        path.join(fontPath, "Roboto-Italic.ttf")
+      );
+
+      // Header
+      doc
+        .font("Roboto-Bold")
+        .fontSize(10)
+        .text((req.store?.name || "Cửa hàng").toUpperCase(), { align: "left" });
+      doc.moveUp();
+      doc.text("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM", { align: "right" });
+      doc.text("Độc lập - Tự do - Hạnh phúc", { align: "right" });
+      doc.moveDown(2);
+
+      // Title
+      doc
+        .font("Roboto-Bold")
+        .fontSize(18)
+        .text("SO SÁNH DOANH THU DANH MỤC", { align: "center" });
+      doc
+        .font("Roboto-Italic")
+        .fontSize(11)
+        .text(`Năm: ${year} và ${prevYear}`, { align: "center" });
+      doc.moveDown(2);
+
+      // Data
+      rows.forEach((r, idx) => {
+        doc
+          .font("Roboto-Bold")
+          .fontSize(11)
+          .text(`${idx + 1}. ${r.category}`);
+        doc.font("Roboto-Regular").fontSize(10);
+        doc.text(
+          `   Năm ${prevYear}: ${new Intl.NumberFormat("vi-VN").format(
+            safeNumber(r.revenuePrevYear)
+          )} VND`,
+          { indent: 20 }
+        );
+        doc.text(
+          `   Năm ${year}: ${new Intl.NumberFormat("vi-VN").format(
+            safeNumber(r.revenueThisYear)
+          )} VND`,
+          { indent: 20 }
+        );
+        doc.text(
+          `   Chênh lệch: ${new Intl.NumberFormat("vi-VN").format(
+            safeNumber(r.difference)
+          )} VND`,
+          { indent: 20 }
+        );
+        doc.moveDown(0.5);
+      });
+
+      doc.end();
+      return;
+    }
   } catch (err) {
     console.error("Lỗi export so sánh doanh số:", err);
     return res.status(500).json({ message: "Lỗi server khi xuất Excel" });
@@ -896,12 +1876,14 @@ const getMonthlyRevenueByDay = async (req, res) => {
     const storeId = req.query.storeId || req.query.shopId;
     const month = req.query.month; // YYYY-MM
     if (!storeId || !month) {
-      return res.status(400).json({ message: "Thiếu storeId hoặc month (YYYY-MM)" });
+      return res
+        .status(400)
+        .json({ message: "Thiếu storeId hoặc month (YYYY-MM)" });
     }
 
     const { start, end } = periodToRange("month", month);
 
-    const [ordersByDay, itemsByDay] = await Promise.all([
+    const [ordersByDay, itemsByDay, refundsByDay] = await Promise.all([
       Order.aggregate([
         {
           $match: {
@@ -913,9 +1895,18 @@ const getMonthlyRevenueByDay = async (req, res) => {
         {
           $group: {
             _id: {
-              y: { $year: "$createdAt" },
-              m: { $month: "$createdAt" },
-              d: { $dayOfMonth: "$createdAt" },
+              y: {
+                $year: { date: "$createdAt", timezone: "Asia/Ho_Chi_Minh" },
+              },
+              m: {
+                $month: { date: "$createdAt", timezone: "Asia/Ho_Chi_Minh" },
+              },
+              d: {
+                $dayOfMonth: {
+                  date: "$createdAt",
+                  timezone: "Asia/Ho_Chi_Minh",
+                },
+              },
             },
             revenue: { $sum: { $toDecimal: "$totalAmount" } },
             orderCount: { $sum: 1 },
@@ -952,11 +1943,30 @@ const getMonthlyRevenueByDay = async (req, res) => {
         {
           $group: {
             _id: {
-              y: { $year: "$order.createdAt" },
-              m: { $month: "$order.createdAt" },
-              d: { $dayOfMonth: "$order.createdAt" },
+              y: {
+                $year: {
+                  date: "$order.createdAt",
+                  timezone: "Asia/Ho_Chi_Minh",
+                },
+              },
+              m: {
+                $month: {
+                  date: "$order.createdAt",
+                  timezone: "Asia/Ho_Chi_Minh",
+                },
+              },
+              d: {
+                $dayOfMonth: {
+                  date: "$order.createdAt",
+                  timezone: "Asia/Ho_Chi_Minh",
+                },
+              },
             },
-            itemsSold: { $sum: "$quantity" },
+            itemsSold: {
+              $sum: {
+                $subtract: ["$quantity", { $ifNull: ["$refundedQuantity", 0] }],
+              },
+            },
           },
         },
         {
@@ -969,12 +1979,62 @@ const getMonthlyRevenueByDay = async (req, res) => {
           },
         },
       ]),
+      // 3. Refunds by Day (Subtracted from Revenue)
+      mongoose.model("OrderRefund").aggregate([
+        { $match: { refundedAt: { $gte: start, $lte: end } } },
+        {
+          $lookup: {
+            from: "orders",
+            localField: "orderId",
+            foreignField: "_id",
+            as: "orderInfo",
+          },
+        },
+        { $unwind: "$orderInfo" },
+        { $match: { "orderInfo.storeId": toObjectId(storeId) } },
+        {
+          $group: {
+            _id: {
+              y: {
+                $year: { date: "$refundedAt", timezone: "Asia/Ho_Chi_Minh" },
+              },
+              m: {
+                $month: { date: "$refundedAt", timezone: "Asia/Ho_Chi_Minh" },
+              },
+              d: {
+                $dayOfMonth: {
+                  date: "$refundedAt",
+                  timezone: "Asia/Ho_Chi_Minh",
+                },
+              },
+            },
+            refundAmount: { $sum: { $toDecimal: "$refundAmount" } },
+          },
+        },
+      ]),
     ]);
 
     const orderMap = new Map(
-      (ordersByDay || []).map((r) => [`${r.y}-${r.m}-${r.d}`, { revenue: safeNumber(r.revenue), orderCount: safeNumber(r.orderCount) }])
+      (ordersByDay || []).map((r) => [
+        `${r.y}-${r.m}-${r.d}`,
+        {
+          revenue: safeNumber(r.revenue),
+          orderCount: safeNumber(r.orderCount),
+        },
+      ])
     );
-    const itemsMap = new Map((itemsByDay || []).map((r) => [`${r.y}-${r.m}-${r.d}`, safeNumber(r.itemsSold)]));
+    const itemsMap = new Map(
+      (itemsByDay || []).map((r) => [
+        `${r.y}-${r.m}-${r.d}`,
+        safeNumber(r.itemsSold),
+      ])
+    );
+    // Refund Map
+    const refundMap = new Map();
+    (refundsByDay || []).forEach((r) => {
+      const key = `${r._id.y}-${r._id.m}-${r._id.d}`;
+      refundMap.set(key, Number(r.refundAmount.toString()));
+    });
 
     const monthStart = dayjs(month + "-01");
     const daysInMonth = monthStart.daysInMonth();
@@ -985,18 +2045,28 @@ const getMonthlyRevenueByDay = async (req, res) => {
       const d = idx + 1;
       const key = `${y}-${m}-${d}`;
       const o = orderMap.get(key) || { revenue: 0, orderCount: 0 };
+      const rAmt = refundMap.get(key) || 0;
       return {
-        date: dayjs(`${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`).format("YYYY-MM-DD"),
+        date: dayjs(
+          `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`
+        ).format("YYYY-MM-DD"),
+        dayLabel: d, // Add dayLabel for PDF
         orderCount: o.orderCount,
         itemsSold: itemsMap.get(key) || 0,
-        revenue: o.revenue,
+        revenue: o.revenue - rAmt, // Net Revenue
       };
     });
 
-    return res.json({ message: "Báo cáo doanh thu theo tháng (theo ngày)", month, data });
+    return res.json({
+      message: "Báo cáo doanh thu theo tháng (theo ngày)",
+      month,
+      data,
+    });
   } catch (err) {
     console.error("Lỗi báo cáo doanh thu theo tháng:", err);
-    return res.status(500).json({ message: "Lỗi server khi báo cáo theo tháng" });
+    return res
+      .status(500)
+      .json({ message: "Lỗi server khi báo cáo theo tháng" });
   }
 };
 
@@ -1007,10 +2077,14 @@ const exportMonthlyRevenueByDay = async (req, res) => {
     const { format = "xlsx" } = req.query;
 
     if (!storeId || !month) {
-      return res.status(400).json({ message: "Thiếu storeId hoặc month (YYYY-MM)" });
+      return res
+        .status(400)
+        .json({ message: "Thiếu storeId hoặc month (YYYY-MM)" });
     }
-    if (format !== "xlsx") {
-      return res.status(400).json({ message: "Chỉ hỗ trợ xuất Excel (.xlsx)" });
+    if (format !== "xlsx" && format !== "pdf") {
+      return res
+        .status(400)
+        .json({ message: "Chỉ hỗ trợ xuất Excel (.xlsx) hoặc PDF (.pdf)" });
     }
 
     let rows;
@@ -1036,15 +2110,97 @@ const exportMonthlyRevenueByDay = async (req, res) => {
       "Số mặt hàng bán ra": r.itemsSold,
       "Doanh thu (VNĐ)": r.revenue,
     }));
-    const ws = XLSX.utils.json_to_sheet(sheetData);
+    const ws = createWorksheetWithReportHeader({
+      reportTitle: "Doanh thu theo tháng",
+      req,
+      sheetData,
+    });
     ws["!cols"] = [{ wch: 12 }, { wch: 10 }, { wch: 20 }, { wch: 16 }];
     XLSX.utils.book_append_sheet(wb, ws, "Doanh thu theo tháng");
 
-    const buffer = XLSX.write(wb, { bookType: "xlsx", type: "buffer" });
-    const fileName = buildExportFileName({ reportName: "Bao_Cao_Doanh_Thu_Theo_Thang", req });
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-    return res.send(buffer);
+    if (format === "xlsx") {
+      const buffer = XLSX.write(wb, {
+        bookType: "xlsx",
+        type: "buffer",
+        cellStyles: true,
+      });
+      const fileName = buildExportFileName({
+        reportName: "Bao_Cao_Doanh_Thu_Theo_Thang",
+        req,
+      });
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName}"`
+      );
+      return res.send(buffer);
+    }
+
+    if (format === "pdf") {
+      res.setHeader("Content-Type", "application/pdf");
+      const fileName = buildExportFileName({
+        reportName: "Bao_Cao_Doanh_Thu_Theo_Thang",
+        req,
+      });
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName.replace(".xlsx", ".pdf")}"`
+      );
+
+      const doc = new PDFDocument({ margin: 50, size: "A4" });
+      doc.pipe(res);
+
+      const fontPath = path.join(__dirname, "..", "fonts", "Roboto", "static");
+      doc.registerFont(
+        "Roboto-Regular",
+        path.join(fontPath, "Roboto-Regular.ttf")
+      );
+      doc.registerFont("Roboto-Bold", path.join(fontPath, "Roboto-Bold.ttf"));
+
+      // Header
+      doc
+        .font("Roboto-Bold")
+        .fontSize(10)
+        .text((req.store?.name || "Cửa hàng").toUpperCase(), { align: "left" });
+      doc.moveUp();
+      doc.text("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM", { align: "right" });
+      doc.text("Độc lập - Tự do - Hạnh phúc", { align: "right" });
+      doc.moveDown(2);
+
+      doc
+        .font("Roboto-Bold")
+        .fontSize(18)
+        .text("BÁO CÁO DOANH THU THEO THÁNG", { align: "center" });
+      doc
+        .font("Roboto-Regular")
+        .fontSize(11)
+        .text(`Tháng: ${month}`, { align: "center" });
+      doc.moveDown(2);
+
+      rows.forEach((r, idx) => {
+        doc
+          .font("Roboto-Bold")
+          .fontSize(10)
+          .text(`${idx + 1}. Ngày ${r.dayLabel}:`);
+        doc
+          .font("Roboto-Regular")
+          .text(
+            `   Số đơn: ${r.orderCount} | Số SP: ${
+              r.itemsSold
+            } | Doanh thu: ${new Intl.NumberFormat("vi-VN").format(
+              safeNumber(r.revenue)
+            )} VND`,
+            { indent: 20 }
+          );
+        doc.moveDown(0.3);
+      });
+
+      doc.end();
+      return;
+    }
   } catch (err) {
     console.error("Lỗi export báo cáo theo tháng:", err);
     return res.status(500).json({ message: "Lỗi server khi xuất Excel" });
@@ -1062,7 +2218,9 @@ const getMonthlyRevenueSummary = async (req, res) => {
     const month = req.query.month; // YYYY-MM (legacy)
     const year = req.query.year ? parseYear(req.query.year) : null; // new: YYYY
     if (!storeId || (!month && !year)) {
-      return res.status(400).json({ message: "Thiếu storeId hoặc (month YYYY-MM) hoặc (year YYYY)" });
+      return res.status(400).json({
+        message: "Thiếu storeId hoặc (month YYYY-MM) hoặc (year YYYY)",
+      });
     }
 
     // ===== NEW: tổng hợp theo năm (trả về đủ 12 tháng) =====
@@ -1070,7 +2228,7 @@ const getMonthlyRevenueSummary = async (req, res) => {
       const startPrevDec = new Date(Date.UTC(year - 1, 11, 1, 0, 0, 0));
       const endYear = new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999));
 
-      const [ordersByMonth, itemsByMonth] = await Promise.all([
+      const [ordersByMonth, itemsByMonth, refundsByMonth] = await Promise.all([
         Order.aggregate([
           {
             $match: {
@@ -1081,7 +2239,14 @@ const getMonthlyRevenueSummary = async (req, res) => {
           },
           {
             $group: {
-              _id: { y: { $year: "$createdAt" }, m: { $month: "$createdAt" } },
+              _id: {
+                y: {
+                  $year: { date: "$createdAt", timezone: "Asia/Ho_Chi_Minh" },
+                },
+                m: {
+                  $month: { date: "$createdAt", timezone: "Asia/Ho_Chi_Minh" },
+                },
+              },
               totalRevenue: { $sum: { $toDecimal: "$totalAmount" } },
               orderCount: { $sum: 1 },
             },
@@ -1115,8 +2280,28 @@ const getMonthlyRevenueSummary = async (req, res) => {
           },
           {
             $group: {
-              _id: { y: { $year: "$order.createdAt" }, m: { $month: "$order.createdAt" } },
-              itemsSold: { $sum: "$quantity" },
+              _id: {
+                y: {
+                  $year: {
+                    date: "$order.createdAt",
+                    timezone: "Asia/Ho_Chi_Minh",
+                  },
+                },
+                m: {
+                  $month: {
+                    date: "$order.createdAt",
+                    timezone: "Asia/Ho_Chi_Minh",
+                  },
+                },
+              },
+              itemsSold: {
+                $sum: {
+                  $subtract: [
+                    "$quantity",
+                    { $ifNull: ["$refundedQuantity", 0] },
+                  ],
+                },
+              },
             },
           },
           {
@@ -1128,12 +2313,62 @@ const getMonthlyRevenueSummary = async (req, res) => {
             },
           },
         ]),
+        // Add Refunds Aggregation
+        mongoose.model("OrderRefund").aggregate([
+          { $match: { refundedAt: { $gte: startPrevDec, $lte: endYear } } },
+          {
+            $lookup: {
+              from: "orders",
+              localField: "orderId",
+              foreignField: "_id",
+              as: "orderInfo",
+            },
+          },
+          { $unwind: "$orderInfo" },
+          { $match: { "orderInfo.storeId": toObjectId(storeId) } },
+          {
+            $group: {
+              _id: {
+                y: {
+                  $year: {
+                    date: "$refundedAt",
+                    timezone: "Asia/Ho_Chi_Minh",
+                  },
+                },
+                m: {
+                  $month: {
+                    date: "$refundedAt",
+                    timezone: "Asia/Ho_Chi_Minh",
+                  },
+                },
+              },
+              refundAmount: { $sum: { $toDecimal: "$refundAmount" } },
+            },
+          },
+        ]),
       ]);
 
       const revenueMap = new Map(
-        (ordersByMonth || []).map((r) => [`${r.y}-${r.m}`, { revenue: safeNumber(r.totalRevenue), orderCount: safeNumber(r.orderCount) }])
+        (ordersByMonth || []).map((r) => [
+          `${r.y}-${r.m}`,
+          {
+            revenue: safeNumber(r.totalRevenue),
+            orderCount: safeNumber(r.orderCount),
+          },
+        ])
       );
-      const itemsMap = new Map((itemsByMonth || []).map((r) => [`${r.y}-${r.m}`, safeNumber(r.itemsSold)]));
+      const itemsMap = new Map(
+        (itemsByMonth || []).map((r) => [
+          `${r.y}-${r.m}`,
+          safeNumber(r.itemsSold),
+        ])
+      );
+      const refundMap = new Map(
+        (refundsByMonth || []).map((r) => [
+          `${r._id.y}-${r._id.m}`,
+          Number(r.refundAmount.toString()),
+        ])
+      );
 
       const data = Array.from({ length: 12 }, (_, idx) => {
         const m = idx + 1;
@@ -1142,15 +2377,19 @@ const getMonthlyRevenueSummary = async (req, res) => {
 
         const cur = revenueMap.get(key) || { revenue: 0, orderCount: 0 };
         const prev = revenueMap.get(prevKey) || { revenue: 0, orderCount: 0 };
+        const curRefund = refundMap.get(key) || 0;
+        const prevRefund = refundMap.get(prevKey) || 0;
 
         const monthStart = dayjs(`${year}-${String(m).padStart(2, "0")}-01`);
         const daysInMonth = monthStart.daysInMonth();
 
-        const totalRevenue = safeNumber(cur.revenue);
+        const totalRevenue = safeNumber(cur.revenue) - curRefund;
         const orderCount = safeNumber(cur.orderCount);
         const itemsSold = safeNumber(itemsMap.get(key) || 0);
-        const avgRevenuePerDay = daysInMonth > 0 ? totalRevenue / daysInMonth : 0;
-        const diffVsPrevMonth = totalRevenue - safeNumber(prev.revenue);
+        const avgRevenuePerDay =
+          daysInMonth > 0 ? totalRevenue / daysInMonth : 0;
+        const diffVsPrevMonth =
+          totalRevenue - (safeNumber(prev.revenue) - prevRefund);
 
         return {
           year,
@@ -1176,9 +2415,18 @@ const getMonthlyRevenueSummary = async (req, res) => {
     const daysInMonth = monthStart.daysInMonth();
 
     const prevMonthKey = monthStart.subtract(1, "month").format("YYYY-MM");
-    const { start: prevStart, end: prevEnd } = periodToRange("month", prevMonthKey);
+    const { start: prevStart, end: prevEnd } = periodToRange(
+      "month",
+      prevMonthKey
+    );
 
-    const [thisMonthOrders, thisMonthItems, prevMonthOrders] = await Promise.all([
+    const [
+      thisMonthOrders,
+      thisMonthItems,
+      prevMonthOrders,
+      thisMonthRefunds,
+      prevMonthRefunds,
+    ] = await Promise.all([
       Order.aggregate([
         {
           $match: {
@@ -1222,7 +2470,11 @@ const getMonthlyRevenueSummary = async (req, res) => {
         {
           $group: {
             _id: null,
-            itemsSold: { $sum: "$quantity" },
+            itemsSold: {
+              $sum: {
+                $subtract: ["$quantity", { $ifNull: ["$refundedQuantity", 0] }],
+              },
+            },
           },
         },
         { $project: { _id: 0, itemsSold: 1 } },
@@ -1231,7 +2483,7 @@ const getMonthlyRevenueSummary = async (req, res) => {
         {
           $match: {
             storeId: toObjectId(storeId),
-            status: { $in: PAID_STATUSES },
+            status: { $in: ["paid", "partially_refunded"] },
             createdAt: { $gte: prevStart, $lte: prevEnd },
           },
         },
@@ -1241,14 +2493,66 @@ const getMonthlyRevenueSummary = async (req, res) => {
             totalRevenue: { $sum: { $toDecimal: "$totalAmount" } },
           },
         },
-        { $project: { _id: 0, totalRevenue: { $toDouble: "$totalRevenue" } } },
+        {
+          $project: { _id: 0, totalRevenue: { $toDouble: "$totalRevenue" } },
+        },
+      ]),
+      // This Month Refunds
+      mongoose.model("OrderRefund").aggregate([
+        { $match: { refundedAt: { $gte: start, $lte: end } } },
+        {
+          $lookup: {
+            from: "orders",
+            localField: "orderId",
+            foreignField: "_id",
+            as: "orderInfo",
+          },
+        },
+        { $unwind: "$orderInfo" },
+        { $match: { "orderInfo.storeId": toObjectId(storeId) } },
+        {
+          $group: {
+            _id: null,
+            refundAmount: { $sum: { $toDecimal: "$refundAmount" } },
+          },
+        },
+      ]),
+      // Prev Month Refunds
+      mongoose.model("OrderRefund").aggregate([
+        { $match: { refundedAt: { $gte: prevStart, $lte: prevEnd } } },
+        {
+          $lookup: {
+            from: "orders",
+            localField: "orderId",
+            foreignField: "_id",
+            as: "orderInfo",
+          },
+        },
+        { $unwind: "$orderInfo" },
+        { $match: { "orderInfo.storeId": toObjectId(storeId) } },
+        {
+          $group: {
+            _id: null,
+            refundAmount: { $sum: { $toDecimal: "$refundAmount" } },
+          },
+        },
       ]),
     ]);
 
-    const totalRevenue = safeNumber(thisMonthOrders?.[0]?.totalRevenue);
+    const grossRevenue = safeNumber(thisMonthOrders?.[0]?.totalRevenue);
+    const refundRevenue = thisMonthRefunds?.[0]
+      ? Number(thisMonthRefunds[0].refundAmount.toString())
+      : 0;
+    const totalRevenue = grossRevenue - refundRevenue;
+
     const orderCount = safeNumber(thisMonthOrders?.[0]?.orderCount);
     const itemsSold = safeNumber(thisMonthItems?.[0]?.itemsSold);
-    const prevRevenue = safeNumber(prevMonthOrders?.[0]?.totalRevenue);
+
+    const prevGross = safeNumber(prevMonthOrders?.[0]?.totalRevenue);
+    const prevRefund = prevMonthRefunds?.[0]
+      ? Number(prevMonthRefunds[0].refundAmount.toString())
+      : 0;
+    const prevRevenue = prevGross - prevRefund;
 
     const avgRevenuePerDay = daysInMonth > 0 ? totalRevenue / daysInMonth : 0;
     const diffVsPrevMonth = totalRevenue - prevRevenue;
@@ -1269,7 +2573,9 @@ const getMonthlyRevenueSummary = async (req, res) => {
     });
   } catch (err) {
     console.error("Lỗi báo cáo tổng hợp theo tháng:", err);
-    return res.status(500).json({ message: "Lỗi server khi báo cáo tổng hợp theo tháng" });
+    return res
+      .status(500)
+      .json({ message: "Lỗi server khi báo cáo tổng hợp theo tháng" });
   }
 };
 
@@ -1281,10 +2587,14 @@ const exportMonthlyRevenueSummary = async (req, res) => {
     const { format = "xlsx" } = req.query;
 
     if (!storeId || (!month && !year)) {
-      return res.status(400).json({ message: "Thiếu storeId hoặc (month YYYY-MM) hoặc (year YYYY)" });
+      return res.status(400).json({
+        message: "Thiếu storeId hoặc (month YYYY-MM) hoặc (year YYYY)",
+      });
     }
-    if (format !== "xlsx") {
-      return res.status(400).json({ message: "Chỉ hỗ trợ xuất Excel (.xlsx)" });
+    if (format !== "xlsx" && format !== "pdf") {
+      return res
+        .status(400)
+        .json({ message: "Chỉ hỗ trợ xuất Excel (.xlsx) hoặc PDF (.pdf)" });
     }
 
     let payload;
@@ -1303,7 +2613,12 @@ const exportMonthlyRevenueSummary = async (req, res) => {
     if (year) {
       const rows = payload?.data;
       if (!Array.isArray(rows) || !rows.length) {
-        return res.status(404).json({ message: "Không có dữ liệu để xuất" });
+        return await sendEmptyNotificationWorkbook(
+          res,
+          "dữ liệu báo cáo",
+          req.store,
+          "Bao_Cao_Doanh_Thu"
+        );
       }
       const sheetData = rows.map((r) => ({
         Tháng: r.monthLabel,
@@ -1314,7 +2629,10 @@ const exportMonthlyRevenueSummary = async (req, res) => {
         "So với tháng trước (VNĐ)": safeNumber(r.diffVsPrevMonth),
       }));
 
-      const totalRevenue = sheetData.reduce((sum, r) => sum + safeNumber(r["Tổng doanh thu (VNĐ)"]), 0);
+      const totalRevenue = sheetData.reduce(
+        (sum, r) => sum + safeNumber(r["Tổng doanh thu (VNĐ)"]),
+        0
+      );
 
       sheetData.push({
         Tháng: "Tổng cộng",
@@ -1324,13 +2642,29 @@ const exportMonthlyRevenueSummary = async (req, res) => {
         "Doanh thu TB / ngày (VNĐ)": "",
         "So với tháng trước (VNĐ)": "",
       });
-      const ws = XLSX.utils.json_to_sheet(sheetData);
-      ws["!cols"] = [{ wch: 10 }, { wch: 18 }, { wch: 12 }, { wch: 18 }, { wch: 18 }, { wch: 18 }];
+      const ws = createWorksheetWithReportHeader({
+        reportTitle: "Tổng hợp doanh thu theo tháng",
+        req,
+        sheetData,
+      });
+      ws["!cols"] = [
+        { wch: 10 },
+        { wch: 18 },
+        { wch: 12 },
+        { wch: 18 },
+        { wch: 18 },
+        { wch: 18 },
+      ];
       XLSX.utils.book_append_sheet(wb, ws, "Tổng hợp theo tháng");
     } else {
       const row = payload?.data;
       if (!row) {
-        return res.status(404).json({ message: "Không có dữ liệu để xuất" });
+        return await sendEmptyNotificationWorkbook(
+          res,
+          "dữ liệu báo cáo",
+          req.store,
+          "Bao_Cao_Doanh_Thu"
+        );
       }
       const sheetData = [
         {
@@ -1342,16 +2676,164 @@ const exportMonthlyRevenueSummary = async (req, res) => {
           "So với tháng trước (VNĐ)": safeNumber(row.diffVsPrevMonth),
         },
       ];
-      const ws = XLSX.utils.json_to_sheet(sheetData);
-      ws["!cols"] = [{ wch: 10 }, { wch: 18 }, { wch: 12 }, { wch: 18 }, { wch: 18 }, { wch: 18 }];
+      const ws = createWorksheetWithReportHeader({
+        reportTitle: "Tổng hợp doanh thu theo tháng",
+        req,
+        sheetData,
+      });
+      ws["!cols"] = [
+        { wch: 10 },
+        { wch: 18 },
+        { wch: 12 },
+        { wch: 18 },
+        { wch: 18 },
+        { wch: 18 },
+      ];
       XLSX.utils.book_append_sheet(wb, ws, "Tổng hợp theo tháng");
     }
 
-    const buffer = XLSX.write(wb, { bookType: "xlsx", type: "buffer" });
-    const fileName = buildExportFileName({ reportName: "Bao_Cao_Tong_Hop_Theo_Thang", req });
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-    return res.send(buffer);
+    if (format === "xlsx") {
+      const buffer = XLSX.write(wb, {
+        bookType: "xlsx",
+        type: "buffer",
+        cellStyles: true,
+      });
+      const fileName = buildExportFileName({
+        reportName: "Bao_Cao_Tong_Hop_Theo_Thang",
+        req,
+      });
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName}"`
+      );
+      return res.send(buffer);
+    }
+
+    if (format === "pdf") {
+      res.setHeader("Content-Type", "application/pdf");
+      const fileName = buildExportFileName({
+        reportName: "Bao_Cao_Tong_Hop_Theo_Thang",
+        req,
+      });
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName.replace(".xlsx", ".pdf")}"`
+      );
+
+      const doc = new PDFDocument({ margin: 50, size: "A4" });
+      doc.pipe(res);
+
+      const fontPath = path.join(__dirname, "..", "fonts", "Roboto", "static");
+      doc.registerFont(
+        "Roboto-Regular",
+        path.join(fontPath, "Roboto-Regular.ttf")
+      );
+      doc.registerFont("Roboto-Bold", path.join(fontPath, "Roboto-Bold.ttf"));
+      doc.registerFont(
+        "Roboto-Italic",
+        path.join(fontPath, "Roboto-Italic.ttf")
+      );
+
+      // 1. Legal Header
+      doc
+        .font("Roboto-Bold")
+        .fontSize(10)
+        .text((req.store?.name || "Cửa hàng").toUpperCase(), { align: "left" });
+      doc.moveUp();
+      doc.text("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM", { align: "right" });
+      doc.text("Độc lập - Tự do - Hạnh phúc", { align: "right" });
+      doc
+        .fontSize(9)
+        .font("Roboto-Italic")
+        .text("-----------------", { align: "right" });
+      doc.moveDown(2);
+
+      // 2. Title
+      doc
+        .font("Roboto-Bold")
+        .fontSize(18)
+        .text("TỔNG HỢP DOANH THU THEO THÁNG", { align: "center" });
+      doc
+        .font("Roboto-Italic")
+        .fontSize(11)
+        .text(year ? `Năm: ${year}` : `Tháng: ${month}`, { align: "center" });
+      doc.moveDown(2);
+
+      // 3. Info
+      doc
+        .font("Roboto-Regular")
+        .fontSize(10)
+        .text(`Người xuất: ${getExporterNameDisplay(req)}`);
+      doc.text(`Ngày xuất: ${dayjs().format("DD/MM/YYYY HH:mm")}`);
+      doc.moveDown(1);
+      doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
+      doc.moveDown(1);
+
+      // 4. Data
+      const rows = year ? payload?.data : [payload?.data];
+      if (rows && rows.length > 0) {
+        rows.forEach((r, idx) => {
+          if (!r) return;
+          doc
+            .font("Roboto-Bold")
+            .fontSize(11)
+            .text(`${idx + 1}. ${r.monthLabel || ""}`);
+          doc.font("Roboto-Regular").fontSize(10);
+          doc.text(
+            `   Doanh thu: ${new Intl.NumberFormat("vi-VN").format(
+              safeNumber(r.totalRevenue)
+            )} VND`,
+            { indent: 20 }
+          );
+          doc.text(
+            `   Đơn hàng: ${safeNumber(r.orderCount)} | Sản phẩm: ${safeNumber(
+              r.itemsSold
+            )}`,
+            { indent: 20 }
+          );
+          doc.text(
+            `   TB / ngày: ${new Intl.NumberFormat("vi-VN").format(
+              safeNumber(r.avgRevenuePerDay)
+            )} VND`,
+            { indent: 20 }
+          );
+          doc.moveDown(0.5);
+        });
+      }
+
+      doc.moveDown(2);
+
+      // Signatures
+      const startY = doc.y > 650 ? (doc.addPage(), 50) : doc.y;
+      doc
+        .font("Roboto-Bold")
+        .fontSize(10)
+        .text("Người lập biểu", 50, startY, { width: 150, align: "center" });
+      doc.text("Kế toán trưởng", 220, startY, { width: 150, align: "center" });
+      doc.text("Chủ hộ kinh doanh", 390, startY, {
+        width: 150,
+        align: "center",
+      });
+
+      doc
+        .font("Roboto-Italic")
+        .fontSize(9)
+        .text("(Ký, họ tên)", 50, doc.y + 5, { width: 150, align: "center" });
+      doc.moveUp();
+      doc.text("(Ký, họ tên)", 220, doc.y, { width: 150, align: "center" });
+      doc.moveUp();
+      doc.text("(Ký, họ tên, đóng dấu)", 390, doc.y, {
+        width: 150,
+        align: "center",
+      });
+
+      doc.end();
+      return;
+    }
   } catch (err) {
     console.error("Lỗi export tổng hợp theo tháng:", err);
     return res.status(500).json({ message: "Lỗi server khi xuất Excel" });
@@ -1367,7 +2849,9 @@ const getMonthlyTopProducts = async (req, res) => {
     const storeId = req.query.storeId || req.query.shopId;
     const month = req.query.month; // YYYY-MM
     if (!storeId || !month) {
-      return res.status(400).json({ message: "Thiếu storeId hoặc month (YYYY-MM)" });
+      return res
+        .status(400)
+        .json({ message: "Thiếu storeId hoặc month (YYYY-MM)" });
     }
 
     const { start, end } = periodToRange("month", month);
@@ -1385,8 +2869,16 @@ const getMonthlyTopProducts = async (req, res) => {
       {
         $match: {
           "order.storeId": toObjectId(storeId),
-          "order.status": { $in: PAID_STATUSES },
+          "order.status": { $in: ["paid", "partially_refunded"] },
           "order.createdAt": { $gte: start, $lte: end },
+        },
+      },
+      // Exclude fully refunded items
+      {
+        $match: {
+          $expr: {
+            $gt: ["$quantity", { $ifNull: ["$refundedQuantity", 0] }],
+          },
         },
       },
       {
@@ -1400,14 +2892,29 @@ const getMonthlyTopProducts = async (req, res) => {
       { $unwind: "$product" },
       {
         $addFields: {
-          netLine: { $toDouble: "$subtotal" },
+          netLine: {
+            $toDouble: {
+              $multiply: [
+                {
+                  $subtract: [
+                    "$quantity",
+                    { $ifNull: ["$refundedQuantity", 0] },
+                  ],
+                },
+                "$priceAtTime",
+              ],
+            },
+          },
+          netQuantity: {
+            $subtract: ["$quantity", { $ifNull: ["$refundedQuantity", 0] }],
+          },
         },
       },
       {
         $group: {
           _id: "$productId",
           productName: { $first: "$product.name" },
-          quantity: { $sum: "$quantity" },
+          quantity: { $sum: "$netQuantity" },
           revenue: { $sum: "$netLine" },
         },
       },
@@ -1422,14 +2929,18 @@ const getMonthlyTopProducts = async (req, res) => {
       },
     ]);
 
-    const totalRevenueAll = (rows || []).reduce((sum, r) => sum + safeNumber(r.revenue), 0);
+    const totalRevenueAll = (rows || []).reduce(
+      (sum, r) => sum + safeNumber(r.revenue),
+      0
+    );
     const data = (rows || []).map((r) => {
       const revenue = safeNumber(r.revenue);
       return {
         productName: r.productName,
         totalQuantity: safeNumber(r.quantity),
         totalRevenue: revenue,
-        contributionPercent: totalRevenueAll > 0 ? (revenue / totalRevenueAll) * 100 : 0,
+        contributionPercent:
+          totalRevenueAll > 0 ? (revenue / totalRevenueAll) * 100 : 0,
       };
     });
 
@@ -1441,7 +2952,9 @@ const getMonthlyTopProducts = async (req, res) => {
     });
   } catch (err) {
     console.error("Lỗi báo cáo bán chạy theo sản phẩm:", err);
-    return res.status(500).json({ message: "Lỗi server khi báo cáo bán chạy theo sản phẩm" });
+    return res
+      .status(500)
+      .json({ message: "Lỗi server khi báo cáo bán chạy theo sản phẩm" });
   }
 };
 
@@ -1452,10 +2965,14 @@ const exportMonthlyTopProducts = async (req, res) => {
     const { format = "xlsx" } = req.query;
 
     if (!storeId || !month) {
-      return res.status(400).json({ message: "Thiếu storeId hoặc month (YYYY-MM)" });
+      return res
+        .status(400)
+        .json({ message: "Thiếu storeId hoặc month (YYYY-MM)" });
     }
-    if (format !== "xlsx") {
-      return res.status(400).json({ message: "Chỉ hỗ trợ xuất Excel (.xlsx)" });
+    if (format !== "xlsx" && format !== "pdf") {
+      return res
+        .status(400)
+        .json({ message: "Chỉ hỗ trợ xuất Excel (.xlsx) hoặc PDF (.pdf)" });
     }
 
     let payload;
@@ -1481,15 +2998,87 @@ const exportMonthlyTopProducts = async (req, res) => {
       "Tổng doanh thu (VNĐ)": safeNumber(r.totalRevenue),
       "Tỷ lệ đóng góp (%)": safeNumber(r.contributionPercent),
     }));
-    const ws = XLSX.utils.json_to_sheet(sheetData);
+    const ws = createWorksheetWithReportHeader({
+      reportTitle: "Bán chạy theo sản phẩm",
+      req,
+      sheetData,
+    });
     ws["!cols"] = [{ wch: 28 }, { wch: 18 }, { wch: 18 }, { wch: 18 }];
     XLSX.utils.book_append_sheet(wb, ws, "Bán chạy theo sản phẩm");
 
-    const buffer = XLSX.write(wb, { bookType: "xlsx", type: "buffer" });
-    const fileName = buildExportFileName({ reportName: "Bao_Cao_Ban_Chay_Theo_San_Pham", req });
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-    return res.send(buffer);
+    if (format === "xlsx") {
+      const buffer = XLSX.write(wb, {
+        bookType: "xlsx",
+        type: "buffer",
+        cellStyles: true,
+      });
+      const fileName = buildExportFileName({
+        reportName: "Bao_Cao_Ban_Chay_Theo_San_Pham",
+        req,
+      });
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName}"`
+      );
+      return res.send(buffer);
+    }
+
+    if (format === "pdf") {
+      res.setHeader("Content-Type", "application/pdf");
+      const fileName = buildExportFileName({
+        reportName: "Bao_Cao_Ban_Chay_Theo_San_Pham",
+        req,
+      });
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName.replace(".xlsx", ".pdf")}"`
+      );
+
+      const doc = new PDFDocument({ margin: 50, size: "A4" });
+      doc.pipe(res);
+
+      const fontPath = path.join(__dirname, "..", "fonts", "Roboto", "static");
+      doc.registerFont(
+        "Roboto-Regular",
+        path.join(fontPath, "Roboto-Regular.ttf")
+      );
+      doc.registerFont("Roboto-Bold", path.join(fontPath, "Roboto-Bold.ttf"));
+
+      doc
+        .font("Roboto-Bold")
+        .fontSize(18)
+        .text("BÁO CÁO SẢN PHẨM BÁN CHẠY", { align: "center" });
+      doc
+        .font("Roboto-Regular")
+        .fontSize(11)
+        .text(`Tháng: ${month}`, { align: "center" });
+      doc.moveDown(2);
+
+      rows.forEach((r, idx) => {
+        doc
+          .font("Roboto-Bold")
+          .fontSize(10)
+          .text(`${idx + 1}. ${r.productName}`);
+        doc
+          .font("Roboto-Regular")
+          .text(
+            `   Số lượng: ${safeNumber(
+              r.totalQuantity
+            )} | Doanh thu: ${new Intl.NumberFormat("vi-VN").format(
+              safeNumber(r.totalRevenue)
+            )} VND | Tỷ lệ: ${safeNumber(r.contributionPercent).toFixed(2)}%`,
+            { indent: 20 }
+          );
+        doc.moveDown(0.4);
+      });
+
+      doc.end();
+      return;
+    }
   } catch (err) {
     console.error("Lỗi export bán chạy theo sản phẩm:", err);
     return res.status(500).json({ message: "Lỗi server khi xuất Excel" });
@@ -1526,8 +3115,16 @@ const getYearlyProductGroupProductCompare = async (req, res) => {
       {
         $match: {
           "order.storeId": toObjectId(storeId),
-          "order.status": { $in: PAID_STATUSES },
+          "order.status": { $in: ["paid", "partially_refunded"] },
           "order.createdAt": { $gte: startPrev, $lte: endThis },
+        },
+      },
+      // Exclude fully refunded
+      {
+        $match: {
+          $expr: {
+            $gt: ["$quantity", { $ifNull: ["$refundedQuantity", 0] }],
+          },
         },
       },
       {
@@ -1550,9 +3147,26 @@ const getYearlyProductGroupProductCompare = async (req, res) => {
       {
         $addFields: {
           groupId: { $ifNull: [{ $arrayElemAt: ["$group._id", 0] }, null] },
-          groupName: { $ifNull: [{ $arrayElemAt: ["$group.name", 0] }, "(Chưa phân nhóm)"] },
-          orderYear: { $year: "$order.createdAt" },
-          netLine: { $toDouble: "$subtotal" },
+          groupName: {
+            $ifNull: [{ $arrayElemAt: ["$group.name", 0] }, "(Chưa phân nhóm)"],
+          },
+          orderYear: {
+            $year: { date: "$order.createdAt", timezone: "Asia/Ho_Chi_Minh" },
+          },
+          // Fix: Net Line
+          netLine: {
+            $toDouble: {
+              $multiply: [
+                {
+                  $subtract: [
+                    "$quantity",
+                    { $ifNull: ["$refundedQuantity", 0] },
+                  ],
+                },
+                "$priceAtTime",
+              ],
+            },
+          },
         },
       },
       {
@@ -1605,7 +3219,8 @@ const getYearlyProductGroupProductCompare = async (req, res) => {
         });
       }
       const item = g.items.get(pKey);
-      if (r.orderYear === prevYear) item.revenuePrevYear += safeNumber(r.revenue);
+      if (r.orderYear === prevYear)
+        item.revenuePrevYear += safeNumber(r.revenue);
       if (r.orderYear === year) item.revenueThisYear += safeNumber(r.revenue);
     }
 
@@ -1632,19 +3247,29 @@ const getYearlyProductGroupProductCompare = async (req, res) => {
 
     // sort group theo tổng doanh thu năm nay desc
     data.sort((a, b) => {
-      const sumA = (a.items || []).reduce((s, it) => s + safeNumber(it.revenueThisYear), 0);
-      const sumB = (b.items || []).reduce((s, it) => s + safeNumber(it.revenueThisYear), 0);
+      const sumA = (a.items || []).reduce(
+        (s, it) => s + safeNumber(it.revenueThisYear),
+        0
+      );
+      const sumB = (b.items || []).reduce(
+        (s, it) => s + safeNumber(it.revenueThisYear),
+        0
+      );
       return sumB - sumA;
     });
 
     return res.json({
-      message: "Báo cáo doanh thu hằng năm theo danh mục (productGroup) và sản phẩm",
+      message:
+        "Báo cáo doanh thu hằng năm theo danh mục (productGroup) và sản phẩm",
       year,
       prevYear,
       data,
     });
   } catch (err) {
-    console.error("Lỗi báo cáo doanh thu năm theo productGroup->sản phẩm:", err);
+    console.error(
+      "Lỗi báo cáo doanh thu năm theo productGroup->sản phẩm:",
+      err
+    );
     return res.status(500).json({ message: "Lỗi server khi báo cáo theo năm" });
   }
 };
@@ -1701,15 +3326,147 @@ const exportYearlyProductGroupProductCompare = async (req, res) => {
       }
     }
 
-    const ws = XLSX.utils.json_to_sheet(rows);
-    ws["!cols"] = [{ wch: 34 }, { wch: 18 }, { wch: 18 }, { wch: 16 }, { wch: 18 }];
+    const ws = createWorksheetWithReportHeader({
+      reportTitle: "Doanh thu hằng năm",
+      req,
+      sheetData: rows,
+    });
+    ws["!cols"] = [
+      { wch: 34 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 16 },
+      { wch: 18 },
+    ];
     XLSX.utils.book_append_sheet(wb, ws, "Doanh thu hằng năm");
 
-    const buffer = XLSX.write(wb, { bookType: "xlsx", type: "buffer" });
-    const fileName = buildExportFileName({ reportName: "Bao_Cao_Doanh_Thu_Hang_Nam", req });
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-    return res.send(buffer);
+    if (format === "xlsx") {
+      const buffer = XLSX.write(wb, {
+        bookType: "xlsx",
+        type: "buffer",
+        cellStyles: true,
+      });
+      const fileName = buildExportFileName({
+        reportName: "Bao_Cao_Doanh_Thu_Hang_Nam",
+        req,
+      });
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName}"`
+      );
+      return res.send(buffer);
+    }
+
+    if (format === "pdf") {
+      res.setHeader("Content-Type", "application/pdf");
+      const fileName = buildExportFileName({
+        reportName: "Bao_Cao_Doanh_Thu_Hang_Nam",
+        req,
+      });
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName.replace(".xlsx", ".pdf")}"`
+      );
+
+      const doc = new PDFDocument({ margin: 50, size: "A4" });
+      doc.pipe(res);
+
+      const fontPath = path.join(__dirname, "..", "fonts", "Roboto", "static");
+      doc.registerFont(
+        "Roboto-Regular",
+        path.join(fontPath, "Roboto-Regular.ttf")
+      );
+      doc.registerFont("Roboto-Bold", path.join(fontPath, "Roboto-Bold.ttf"));
+      doc.registerFont(
+        "Roboto-Italic",
+        path.join(fontPath, "Roboto-Italic.ttf")
+      );
+
+      // 1. Legal Header
+      doc
+        .font("Roboto-Bold")
+        .fontSize(10)
+        .text((req.store?.name || "Cửa hàng").toUpperCase(), { align: "left" });
+      doc.moveUp();
+      doc.text("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM", { align: "right" });
+      doc.text("Độc lập - Tự do - Hạnh phúc", { align: "right" });
+      doc
+        .fontSize(9)
+        .font("Roboto-Italic")
+        .text("-----------------", { align: "right" });
+      doc.moveDown(2);
+
+      // 2. Title
+      doc
+        .font("Roboto-Bold")
+        .fontSize(18)
+        .text("SO SÁNH DOANH THU HẰNG NĂM", { align: "center" });
+      doc
+        .font("Roboto-Italic")
+        .fontSize(11)
+        .text(`Năm đối chiếu: ${prevYear} và ${year}`, { align: "center" });
+      doc.moveDown(2);
+
+      // 3. Info
+      doc
+        .font("Roboto-Regular")
+        .fontSize(10)
+        .text(`Người xuất: ${getExporterNameDisplay(req)}`);
+      doc.text(`Ngày xuất: ${dayjs().format("DD/MM/YYYY HH:mm")}`);
+      doc.moveDown(1);
+      doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
+      doc.moveDown(1);
+
+      // 4. Data
+      groups.forEach((g) => {
+        doc
+          .font("Roboto-Bold")
+          .fontSize(12)
+          .text(g.productGroup?.name || "(Chưa phân nhóm)");
+        doc.moveDown(0.2);
+        (g.items || []).forEach((it) => {
+          doc.font("Roboto-Regular").fontSize(10).text(`${it.productName}:`);
+          doc.text(
+            `   ${prevYear}: ${new Intl.NumberFormat("vi-VN").format(
+              safeNumber(it.revenuePrevYear)
+            )} | ${year}: ${new Intl.NumberFormat("vi-VN").format(
+              safeNumber(it.revenueThisYear)
+            )}`,
+            { indent: 20 }
+          );
+          doc.text(
+            `   Chênh lệch: ${new Intl.NumberFormat("vi-VN").format(
+              safeNumber(it.difference)
+            )} | Tổng: ${new Intl.NumberFormat("vi-VN").format(
+              safeNumber(it.totalTwoYears)
+            )}`,
+            { indent: 20 }
+          );
+          doc.moveDown(0.3);
+        });
+        doc.moveDown(0.5);
+      });
+
+      doc.moveDown(2);
+
+      // Signatures
+      const startY = doc.y > 650 ? (doc.addPage(), 50) : doc.y;
+      doc
+        .font("Roboto-Bold")
+        .fontSize(10)
+        .text("Người lập biểu", 50, startY, { width: 150, align: "center" });
+      doc.text("Chủ hộ kinh doanh", 390, startY, {
+        width: 150,
+        align: "center",
+      });
+
+      doc.end();
+      return;
+    }
   } catch (err) {
     console.error("Lỗi export báo cáo doanh thu hằng năm:", err);
     return res.status(500).json({ message: "Lỗi server khi xuất Excel" });
@@ -1726,7 +3483,9 @@ const getQuarterlyRevenueByCategory = async (req, res) => {
     const storeId = req.query.storeId || req.query.shopId;
     const quarter = req.query.quarter; // YYYY-Qn
     if (!storeId || !quarter) {
-      return res.status(400).json({ message: "Thiếu storeId hoặc quarter (YYYY-Qn)" });
+      return res
+        .status(400)
+        .json({ message: "Thiếu storeId hoặc quarter (YYYY-Qn)" });
     }
 
     const { start, end } = periodToRange("quarter", quarter);
@@ -1746,8 +3505,16 @@ const getQuarterlyRevenueByCategory = async (req, res) => {
       {
         $match: {
           "order.storeId": toObjectId(storeId),
-          "order.status": { $in: PAID_STATUSES },
+          "order.status": { $in: ["paid", "partially_refunded"] },
           "order.createdAt": { $gte: start, $lte: end },
+        },
+      },
+      // Exclude fully refunded
+      {
+        $match: {
+          $expr: {
+            $gt: ["$quantity", { $ifNull: ["$refundedQuantity", 0] }],
+          },
         },
       },
       {
@@ -1772,8 +3539,22 @@ const getQuarterlyRevenueByCategory = async (req, res) => {
           groupName: {
             $ifNull: [{ $arrayElemAt: ["$group.name", 0] }, "(Chưa phân nhóm)"],
           },
-          month: { $month: "$order.createdAt" },
-          netLine: { $toDouble: "$subtotal" },
+          month: {
+            $month: { date: "$order.createdAt", timezone: "Asia/Ho_Chi_Minh" },
+          },
+          netLine: {
+            $toDouble: {
+              $multiply: [
+                {
+                  $subtract: [
+                    "$quantity",
+                    { $ifNull: ["$refundedQuantity", 0] },
+                  ],
+                },
+                "$priceAtTime",
+              ],
+            },
+          },
         },
       },
       {
@@ -1814,9 +3595,20 @@ const getQuarterlyRevenueByCategory = async (req, res) => {
     });
 
     // sort theo tổng actual desc
-    data.sort((a, b) => b.month1.actual + b.month2.actual + b.month3.actual - (a.month1.actual + a.month2.actual + a.month3.actual));
+    data.sort(
+      (a, b) =>
+        b.month1.actual +
+        b.month2.actual +
+        b.month3.actual -
+        (a.month1.actual + a.month2.actual + a.month3.actual)
+    );
 
-    return res.json({ message: "Báo cáo doanh thu theo quý (theo danh mục)", quarter, months, data });
+    return res.json({
+      message: "Báo cáo doanh thu theo quý (theo danh mục)",
+      quarter,
+      months,
+      data,
+    });
   } catch (err) {
     console.error("Lỗi báo cáo doanh thu theo quý:", err);
     return res.status(500).json({ message: "Lỗi server khi báo cáo theo quý" });
@@ -1830,7 +3622,9 @@ const exportQuarterlyRevenueByCategory = async (req, res) => {
     const { format = "xlsx" } = req.query;
 
     if (!storeId || !quarter) {
-      return res.status(400).json({ message: "Thiếu storeId hoặc quarter (YYYY-Qn)" });
+      return res
+        .status(400)
+        .json({ message: "Thiếu storeId hoặc quarter (YYYY-Qn)" });
     }
     if (format !== "xlsx") {
       return res.status(400).json({ message: "Chỉ hỗ trợ xuất Excel (.xlsx)" });
@@ -1853,7 +3647,8 @@ const exportQuarterlyRevenueByCategory = async (req, res) => {
       return res.status(404).json({ message: "Không có dữ liệu để xuất" });
     }
 
-    const [m1, m2, m3] = Array.isArray(months) && months.length === 3 ? months : [1, 2, 3];
+    const [m1, m2, m3] =
+      Array.isArray(months) && months.length === 3 ? months : [1, 2, 3];
     const wb = XLSX.utils.book_new();
     const sheetData = rows.map((r) => ({
       "Danh mục": r.category,
@@ -1868,15 +3663,100 @@ const exportQuarterlyRevenueByCategory = async (req, res) => {
       [`Tháng ${m3} - Chênh lệch`]: safeNumber(r.month3?.diff),
     }));
 
-    const ws = XLSX.utils.json_to_sheet(sheetData);
-    ws["!cols"] = [{ wch: 22 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }];
+    const ws = createWorksheetWithReportHeader({
+      reportTitle: "Báo cáo theo quý",
+      req,
+      sheetData,
+    });
+    ws["!cols"] = [
+      { wch: 22 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 16 },
+    ];
     XLSX.utils.book_append_sheet(wb, ws, "Báo cáo theo quý");
 
-    const buffer = XLSX.write(wb, { bookType: "xlsx", type: "buffer" });
-    const fileName = buildExportFileName({ reportName: "Bao_Cao_Doanh_Thu_Theo_Quy", req });
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-    return res.send(buffer);
+    if (format === "xlsx") {
+      const buffer = XLSX.write(wb, {
+        bookType: "xlsx",
+        type: "buffer",
+        cellStyles: true,
+      });
+      const fileName = buildExportFileName({
+        reportName: "Bao_Cao_Doanh_Thu_Theo_Quy",
+        req,
+      });
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName}"`
+      );
+      return res.send(buffer);
+    }
+
+    if (format === "pdf") {
+      res.setHeader("Content-Type", "application/pdf");
+      const fileName = buildExportFileName({
+        reportName: "Bao_Cao_Doanh_Thu_Theo_Quy",
+        req,
+      });
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName.replace(".xlsx", ".pdf")}"`
+      );
+
+      const doc = new PDFDocument({ margin: 50, size: "A4" });
+      doc.pipe(res);
+
+      const fontPath = path.join(__dirname, "..", "fonts", "Roboto", "static");
+      doc.registerFont(
+        "Roboto-Regular",
+        path.join(fontPath, "Roboto-Regular.ttf")
+      );
+      doc.registerFont("Roboto-Bold", path.join(fontPath, "Roboto-Bold.ttf"));
+
+      doc
+        .font("Roboto-Bold")
+        .fontSize(18)
+        .text("BÁO CÁO DOANH THU THEO QUÝ", { align: "center" });
+      doc
+        .font("Roboto-Regular")
+        .fontSize(11)
+        .text(`Quý: ${quarter}`, { align: "center" });
+      doc.moveDown(2);
+
+      rows.forEach((r, idx) => {
+        doc
+          .font("Roboto-Bold")
+          .fontSize(10)
+          .text(`${idx + 1}. ${r.category}`);
+        doc
+          .font("Roboto-Regular")
+          .text(
+            `   T1: ${new Intl.NumberFormat("vi-VN").format(
+              r.month1?.actual
+            )} | T2: ${new Intl.NumberFormat("vi-VN").format(
+              r.month2?.actual
+            )} | T3: ${new Intl.NumberFormat("vi-VN").format(
+              r.month3?.actual
+            )}`,
+            { indent: 20 }
+          );
+        doc.moveDown(0.4);
+      });
+
+      doc.end();
+      return;
+    }
   } catch (err) {
     console.error("Lỗi export báo cáo theo quý:", err);
     return res.status(500).json({ message: "Lỗi server khi xuất Excel" });
@@ -1913,8 +3793,16 @@ const getYearlyTopProducts = async (req, res) => {
       {
         $match: {
           "order.storeId": toObjectId(storeId),
-          "order.status": { $in: PAID_STATUSES },
+          "order.status": { $in: ["paid", "partially_refunded"] },
           "order.createdAt": { $gte: start, $lte: end },
+        },
+      },
+      // Exclude fully refunded
+      {
+        $match: {
+          $expr: {
+            $gt: ["$quantity", { $ifNull: ["$refundedQuantity", 0] }],
+          },
         },
       },
       {
@@ -1928,7 +3816,22 @@ const getYearlyTopProducts = async (req, res) => {
       { $unwind: "$product" },
       {
         $addFields: {
-          netLine: { $toDouble: "$subtotal" },
+          netLine: {
+            $toDouble: {
+              $multiply: [
+                {
+                  $subtract: [
+                    "$quantity",
+                    { $ifNull: ["$refundedQuantity", 0] },
+                  ],
+                },
+                "$priceAtTime",
+              ],
+            },
+          },
+          netQuantity: {
+            $subtract: ["$quantity", { $ifNull: ["$refundedQuantity", 0] }],
+          },
         },
       },
       {
@@ -1936,7 +3839,7 @@ const getYearlyTopProducts = async (req, res) => {
           _id: "$productId",
           sku: { $first: "$product.sku" },
           name: { $first: "$product.name" },
-          qty: { $sum: "$quantity" },
+          qty: { $sum: "$netQuantity" },
           revenue: { $sum: "$netLine" },
         },
       },
@@ -1954,7 +3857,11 @@ const getYearlyTopProducts = async (req, res) => {
       },
     ]);
 
-    return res.json({ message: "Báo cáo doanh thu theo năm (top sản phẩm)", year, data: rows || [] });
+    return res.json({
+      message: "Báo cáo doanh thu theo năm (top sản phẩm)",
+      year,
+      data: rows || [],
+    });
   } catch (err) {
     console.error("Lỗi báo cáo theo năm (top sản phẩm):", err);
     return res.status(500).json({ message: "Lỗi server khi báo cáo theo năm" });
@@ -2000,15 +3907,94 @@ const exportYearlyTopProducts = async (req, res) => {
       "Ước tính (VNĐ)": safeNumber(r.estimateRevenue),
       "Thực tế (VNĐ)": safeNumber(r.actualRevenue),
     }));
-    const ws = XLSX.utils.json_to_sheet(sheetData);
-    ws["!cols"] = [{ wch: 6 }, { wch: 14 }, { wch: 28 }, { wch: 14 }, { wch: 16 }, { wch: 16 }];
+    const ws = createWorksheetWithReportHeader({
+      reportTitle: "Báo cáo theo năm",
+      req,
+      sheetData,
+    });
+    ws["!cols"] = [
+      { wch: 6 },
+      { wch: 14 },
+      { wch: 28 },
+      { wch: 14 },
+      { wch: 16 },
+      { wch: 16 },
+    ];
     XLSX.utils.book_append_sheet(wb, ws, "Báo cáo theo năm");
 
-    const buffer = XLSX.write(wb, { bookType: "xlsx", type: "buffer" });
-    const fileName = buildExportFileName({ reportName: "Bao_Cao_Doanh_Thu_Theo_Nam", req });
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-    return res.send(buffer);
+    if (format === "xlsx") {
+      const buffer = XLSX.write(wb, {
+        bookType: "xlsx",
+        type: "buffer",
+        cellStyles: true,
+      });
+      const fileName = buildExportFileName({
+        reportName: "Bao_Cao_Doanh_Thu_Theo_Nam",
+        req,
+      });
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName}"`
+      );
+      return res.send(buffer);
+    }
+
+    if (format === "pdf") {
+      res.setHeader("Content-Type", "application/pdf");
+      const fileName = buildExportFileName({
+        reportName: "Bao_Cao_Doanh_Thu_Theo_Nam",
+        req,
+      });
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName.replace(".xlsx", ".pdf")}"`
+      );
+
+      const doc = new PDFDocument({ margin: 50, size: "A4" });
+      doc.pipe(res);
+
+      const fontPath = path.join(__dirname, "..", "fonts", "Roboto", "static");
+      doc.registerFont(
+        "Roboto-Regular",
+        path.join(fontPath, "Roboto-Regular.ttf")
+      );
+      doc.registerFont("Roboto-Bold", path.join(fontPath, "Roboto-Bold.ttf"));
+
+      doc
+        .font("Roboto-Bold")
+        .fontSize(18)
+        .text("BÁO CÁO DOANH THU THEO NĂM", { align: "center" });
+      doc
+        .font("Roboto-Regular")
+        .fontSize(11)
+        .text(`Năm: ${year}`, { align: "center" });
+      doc.moveDown(2);
+
+      rows.forEach((r, idx) => {
+        doc
+          .font("Roboto-Bold")
+          .fontSize(10)
+          .text(`${idx + 1}. ${r.name || r.sku}`);
+        doc
+          .font("Roboto-Regular")
+          .text(
+            `   Số lượng: ${safeNumber(
+              r.itemsSold
+            )} | Thực tế: ${new Intl.NumberFormat("vi-VN").format(
+              safeNumber(r.actualRevenue)
+            )} VND`,
+            { indent: 20 }
+          );
+        doc.moveDown(0.4);
+      });
+
+      doc.end();
+      return;
+    }
   } catch (err) {
     console.error("Lỗi export báo cáo theo năm:", err);
     return res.status(500).json({ message: "Lỗi server khi xuất Excel" });

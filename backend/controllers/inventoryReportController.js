@@ -7,6 +7,10 @@ const OrderItem = require("../models/OrderItem");
 const InventoryVoucher = require("../models/InventoryVoucher");
 const mongoose = require("mongoose");
 const { periodToRange } = require("../utils/period");
+const ExcelJS = require("exceljs");
+const PDFDocument = require("pdfkit");
+const path = require("path");
+const dayjs = require("dayjs");
 
 // Helper: Convert Decimal128 to number
 const toNumber = (v) => {
@@ -334,7 +338,11 @@ const getInventoryVarianceReport = async (req, res) => {
       const beginningStock = beginningImportQty - beginningExportQty;
 
       // 2. Nhập trong kỳ = tổng SL nhập (IN) trong kỳ
-      const periodImportAgg = await InventoryVoucher.aggregate([
+      // Logic mới: Nhập trong kỳ = (Tổng IN) - (Tổng OUT điều chỉnh giảm)
+      // Điều này giúp "giảm số lượng" được tính là "giảm nhập" thay vì "tăng xuất".
+
+      // 2a. Tổng IN
+      const periodInAgg = await InventoryVoucher.aggregate([
         {
           $match: {
             store_id: storeObjectId,
@@ -352,21 +360,21 @@ const getInventoryVarianceReport = async (req, res) => {
         {
           $group: {
             _id: null,
-            totalImport: { $sum: "$items.qty_actual" },
+            total: { $sum: "$items.qty_actual" },
           },
         },
       ]);
+      const totalInPeriod = periodInAgg[0]?.total || 0;
 
-      const importQty = periodImportAgg[0]?.totalImport || 0;
-
-      // 3. Xuất trong kỳ = tổng SL xuất (OUT) trong kỳ
-      const periodExportAgg = await InventoryVoucher.aggregate([
+      // 2b. Tổng OUT Điều chỉnh (có mã chứa "-ADJ-")
+      const periodAdjOutAgg = await InventoryVoucher.aggregate([
         {
           $match: {
             store_id: storeObjectId,
             type: "OUT",
             status: "POSTED",
             voucher_date: { $gte: from, $lte: to },
+            voucher_code: { $regex: /-ADJ-/ }, // Lọc phiếu điều chỉnh
           },
         },
         { $unwind: "$items" },
@@ -378,17 +386,48 @@ const getInventoryVarianceReport = async (req, res) => {
         {
           $group: {
             _id: null,
-            totalExport: { $sum: "$items.qty_actual" },
+            total: { $sum: "$items.qty_actual" },
+          },
+        },
+      ]);
+      const totalAdjOutPeriod = periodAdjOutAgg[0]?.total || 0;
+
+      // Tính Import Qty hiển thị
+      const importQty = totalInPeriod - totalAdjOutPeriod;
+
+      // 3. Xuất trong kỳ = tổng SL xuất (OUT) trong kỳ (TRỪ phiếu điều chỉnh)
+      const periodRegularOutAgg = await InventoryVoucher.aggregate([
+        {
+          $match: {
+            store_id: storeObjectId,
+            type: "OUT",
+            status: "POSTED",
+            voucher_date: { $gte: from, $lte: to },
+            voucher_code: { $not: { $regex: /-ADJ-/ } }, // Lọc phiếu KHÔNG PHẢI điều chỉnh
+          },
+        },
+        { $unwind: "$items" },
+        {
+          $match: {
+            "items.product_id": productId,
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: "$items.qty_actual" },
           },
         },
       ]);
 
-      const exportQty = periodExportAgg[0]?.totalExport || 0;
+      const exportQty = periodRegularOutAgg[0]?.total || 0;
 
       // 4. Tồn cuối kỳ = Tồn đầu kỳ + Nhập trong kỳ – Xuất trong kỳ
+      // (Beg + (In - AdjOut) - RegOut) = Beg + In - (AdjOut + RegOut) -> Chính xác về mặt toán học
       const endingStock = beginningStock + importQty - exportQty;
 
-      // Tính COGS (Cost of Good Sold) = Xuất trong kỳ * Cost Price
+      // Tính COGS (Cost of Good Sold) = Xuất trong kỳ * Cost Price 
+      // (chỉ tính trên xuất bán thực tế, không tính trên điều chỉnh kho)
       const periodCOGS = exportQty * costPrice;
 
       reportDetails.push({
@@ -446,7 +485,147 @@ const getInventoryVarianceReport = async (req, res) => {
   }
 };
 
+const exportInventoryReport = async (req, res) => {
+  try {
+    const { storeId, format = "xlsx", type = "realtime" } = req.query;
+    if (!storeId) return res.status(400).json({ message: "Thiếu storeId" });
+
+    // Mock res to get data from existing functions
+    let resultData;
+    const mockRes = {
+      status: () => ({
+        json: (data) => {
+          resultData = data;
+        },
+      }),
+    };
+
+    if (type === "realtime") {
+      await getInventoryReport(req, mockRes);
+    } else {
+      await getInventoryVarianceReport(req, mockRes);
+    }
+
+    if (!resultData?.success) {
+      return res.status(404).json({ message: resultData?.message || "Không có dữ liệu" });
+    }
+
+    const reportData = resultData.data;
+    const fileName = `Bao_Cao_Ton_Kho_${dayjs().format("DD-MM-YYYY")}`;
+
+    if (format === "xlsx") {
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet("Tồn kho");
+
+      const storeName = req.store?.name || "Cửa hàng";
+      worksheet.addRow([storeName.toUpperCase(), "", "", "CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM"]);
+      worksheet.addRow(["", "", "", "Độc lập - Tự do - Hạnh phúc"]);
+      worksheet.addRow(["", "", "", "-----------------"]);
+      worksheet.addRow([]);
+      worksheet.addRow(["", type === "realtime" ? "BÁO CÁO TỒN KHO HIỆN TẠI" : "BÁO CÁO BIẾN THIÊN TỒN KHO"]);
+      worksheet.addRow(["", `Người xuất: ${req.user?.fullname || req.user?.username}`]);
+      worksheet.addRow(["", `Ngày xuất: ${dayjs().format("DD/MM/YYYY HH:mm")}`]);
+      worksheet.addRow([]);
+
+      const headerRow = type === "realtime"
+        ? ["STT", "Tên sản phẩm", "SKU", "Tồn kho", "Giá vốn", "Giá trị tồn", "Tồn tối thiểu"]
+        : ["STT", "Sản phẩm", "SKU", "Đơn vị", "Đầu kỳ", "Nhập", "Xuất", "Cuối kỳ", "Giá vốn", "Giá trị cuối"];
+
+      const columns = worksheet.addRow(headerRow);
+      columns.font = { bold: true };
+      
+      if (type === "realtime") {
+        reportData.details.forEach((item, idx) => {
+          worksheet.addRow([
+            idx + 1,
+            item.productName,
+            item.sku,
+            item.closingStock,
+            item.costPrice,
+            item.closingValue,
+            item.minStock
+          ]);
+        });
+      } else {
+        reportData.details.forEach((item, idx) => {
+          worksheet.addRow([
+            idx + 1,
+            item.productName,
+            item.sku,
+            item.unit,
+            item.beginningStock,
+            item.importQty,
+            item.exportQty,
+            item.endingStock,
+            item.costPrice,
+            item.endingValue
+          ]);
+        });
+      }
+
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="${fileName}.xlsx"`);
+      await workbook.xlsx.write(res);
+      return res.end();
+    }
+
+    if (format === "pdf") {
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${fileName}.pdf"`);
+
+      const doc = new PDFDocument({ margin: 50, size: "A4" });
+      doc.pipe(res);
+
+      const fontPath = path.join(__dirname, "..", "fonts", "Roboto", "static");
+      doc.registerFont("Roboto-Regular", path.join(fontPath, "Roboto-Regular.ttf"));
+      doc.registerFont("Roboto-Bold", path.join(fontPath, "Roboto-Bold.ttf"));
+      doc.registerFont("Roboto-Italic", path.join(fontPath, "Roboto-Italic.ttf"));
+
+      // Legal Header
+      doc.font("Roboto-Bold").fontSize(10).text((req.store?.name || "Cửa hàng").toUpperCase(), { align: "left" });
+      doc.moveUp();
+      doc.text("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM", { align: "right" });
+      doc.text("Độc lập - Tự do - Hạnh phúc", { align: "right" });
+      doc.moveDown(2);
+
+      // Title
+      doc.font("Roboto-Bold").fontSize(18).text(type === "realtime" ? "BÁO CÁO TỒN KHO HIỆN TẠI" : "BÁO CÁO BIẾN THIÊN TỒN KHO", { align: "center" });
+      doc.font("Roboto-Italic").fontSize(11).text(`Ngày xuất: ${dayjs().format("DD/MM/YYYY HH:mm")}`, { align: "center" });
+      doc.moveDown(2);
+
+      // Data table (Simple list for PDF)
+      doc.font("Roboto-Bold").fontSize(12).text("CHI TIẾT MẶT HÀNG");
+      doc.moveDown(0.5);
+      
+      reportData.details.forEach((item, idx) => {
+        doc.font("Roboto-Regular").fontSize(9).text(`${idx + 1}. ${item.productName} (${item.sku})`);
+        if (type === "realtime") {
+          doc.text(`   Tồn: ${item.closingStock} | Giá vốn: ${item.costPrice} | Giá trị: ${item.closingValue}`, { indent: 20 });
+        } else {
+          doc.text(`   Đầu: ${item.beginningStock} | Nhập: ${item.importQty} | Xuất: ${item.exportQty} | Cuối: ${item.endingStock}`, { indent: 20 });
+        }
+        doc.moveDown(0.2);
+      });
+
+      // Signatures
+      doc.moveDown(3);
+      const startY = doc.y > 650 ? (doc.addPage(), 50) : doc.y;
+      doc.font("Roboto-Bold").fontSize(10).text("Người lập biểu", 50, startY, { width: 150, align: "center" });
+      doc.text("Chủ hộ kinh doanh", 390, startY, { width: 150, align: "center" });
+
+      doc.end();
+      return;
+    }
+
+    res.status(400).json({ message: "Format không hỗ trợ" });
+  } catch (error) {
+    console.error("Lỗi export báo cáo tồn kho:", error);
+    res.status(500).json({ message: "Lỗi server" });
+  }
+};
+
 module.exports = {
-  getInventoryReport, //báo cáo tồn kho thường
-  getInventoryVarianceReport, //cáo cáo tồn kho biến thiên
+  getInventoryReport,
+  getInventoryVarianceReport,
+  exportInventoryReport,
 };

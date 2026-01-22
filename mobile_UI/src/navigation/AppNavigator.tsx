@@ -46,7 +46,6 @@ import TopCustomersScreen from "../screens/customer/TopCustomersScreen";
 import ReportsDashboardScreen from "../screens/reports/ReportsDashboardScreen";
 import RevenueReportScreen from "../screens/reports/RevenueReportScreen";
 import InventoryReportScreen from "../screens/reports/InventoryReportScreen";
-import TaxDeclarationScreen from "../screens/reports/TaxDeclarationScreen";
 import TopProductsScreen from "../screens/reports/TopProductsScreen";
 import ActivityLogScreen from "../screens/settings/ActivityLogScreen";
 import PaymentSettingsScreen from "../screens/settings/PaymentSettingsScreen";
@@ -54,11 +53,16 @@ import NotificationScreen from "../screens/settings/NotificationScreen";
 import FileManagerScreen from "../screens/settings/FileManagerScreen";
 import PricingScreen from "../screens/settings/PricingScreen";
 import SubscriptionScreen from "../screens/settings/SubscriptionScreen";
-import OrderReconciliationScreen from "../screens/orders/OrderReconciliationScreen";
 import EmployeesScreen from "../screens/employee/EmployeesScreen";
 import OrderListScreen from "../screens/orders/OrderListScreen";
 import PosShellScreen from "@/screens/pos/PosShellScreen";
 import DataExportScreen from "@/screens/settings/DataExportSceen";
+import WarehouseListScreen from "../screens/inventory/WarehouseListScreen";
+import InventoryVoucherListScreen from "../screens/inventory/InventoryVoucherListScreen";
+import WarehouseFormScreen from "../screens/inventory/WarehouseFormScreen";
+import InventoryVoucherFormScreen from "../screens/inventory/InventoryVoucherFormScreen";
+import InventoryVoucherDetailScreen from "../screens/inventory/InventoryVoucherDetailScreen";
+import ProcessExpiredScreen from "../screens/inventory/ProcessExpiredScreen";
 
 // ========== TYPES ==========
 export type RootDrawerParamList = {
@@ -70,7 +74,6 @@ export type RootDrawerParamList = {
   ProductGroups: undefined;
   PosOrders: undefined;
   OrderList: undefined;
-  OrderReconciliation: undefined;
   CustomerList: undefined;
   TopCustomers: undefined;
   Employees: undefined;
@@ -79,7 +82,6 @@ export type RootDrawerParamList = {
   ReportsDashboard: undefined;
   RevenueReport: undefined;
   InventoryReport: undefined;
-  TaxReport: undefined;
   TopProductsReport: undefined;
   ProfileScreen: undefined;
   Subscription: undefined;
@@ -89,6 +91,13 @@ export type RootDrawerParamList = {
   NotificationSettings: undefined;
   ExportData: undefined;
   FileManager: undefined;
+  // New screens
+  WarehouseList: undefined;
+  InventoryVoucherList: undefined;
+  WarehouseForm: { warehouse?: any; onRefresh?: () => void };
+  InventoryVoucherForm: { onRefresh?: () => void };
+  InventoryVoucherDetail: { voucherId: string };
+  ProcessExpired: undefined;
 };
 
 interface MenuItem {
@@ -162,6 +171,7 @@ const EmployeeScheduleScreen: FC = () => (
 );
 const ExportDataScreen: FC = () => <DataExportScreen />;
 
+
 // ========== MENU TREE ==========
 const MENU_TREE: readonly MenuSection[] = [
   {
@@ -171,13 +181,13 @@ const MENU_TREE: readonly MenuSection[] = [
       { key: "Dashboard", label: "Tổng quan", icon: "speedometer-outline" },
       {
         key: "SelectStore",
-        label: "Chọn cửa hàng",
+        label: "Chọn cửa hàng khác",
         icon: "storefront-outline",
         permission: "store:view",
       },
       {
         key: "StoreSettings",
-        label: "Thiết lập CH",
+        label: "Thiết lập cửa hàng",
         icon: "settings-outline",
         permission: "store:update",
       },
@@ -188,27 +198,39 @@ const MENU_TREE: readonly MenuSection[] = [
     icon: "cube",
     items: [
       {
+        key: "WarehouseList",
+        label: "Kho hàng",
+        icon: "business-outline",
+        permission: "warehouses:create",
+      },
+      {
+        key: "InventoryVoucherList",
+        label: "Phiếu nhập/xuất kho",
+        icon: "document-attach-outline",
+        permission: "inventory:voucher:create",
+      },
+      {
         key: "ProductList",
-        label: "Hàng hóa",
+        label: "Danh sách hàng hóa",
         icon: "cube-outline",
-        permission: "products:view",
+        permission: "products:create",
       },
       {
         key: "Suppliers",
         label: "Nhà cung cấp",
-        icon: "business-outline",
-        permission: "supplier:view",
+        icon: "people-outline",
+        permission: "suppliers:create",
       },
       {
         key: "ProductGroups",
-        label: "Nhóm hàng",
+        label: "Nhóm hàng hoá",
         icon: "grid-outline",
-        permission: "product-groups:view",
+        permission: "product-groups:create",
       },
     ],
   },
   {
-    title: "ĐƠN HÀNG",
+    title: "ĐƠN HÀNG/BÁN HÀNG",
     icon: "cart",
     items: [
       {
@@ -219,14 +241,8 @@ const MENU_TREE: readonly MenuSection[] = [
       },
       {
         key: "OrderList",
-        label: "DS đơn hàng",
+        label: "Danh sách đơn hàng",
         icon: "receipt-outline",
-        permission: "orders:view",
-      },
-      {
-        key: "OrderReconciliation",
-        label: "Đối soát HĐ",
-        icon: "document-text-outline",
         permission: "orders:view",
       },
     ],
@@ -237,7 +253,7 @@ const MENU_TREE: readonly MenuSection[] = [
     items: [
       {
         key: "CustomerList",
-        label: "DS khách hàng",
+        label: "Danh sách khách hàng",
         icon: "people-outline",
         permission: "customers:search",
       },
@@ -255,9 +271,9 @@ const MENU_TREE: readonly MenuSection[] = [
     items: [
       {
         key: "Employees",
-        label: "Nhân viên",
+        label: "Danh sách nhân viên",
         icon: "id-card-outline",
-        permission: "employees:view",
+        permission: "store:employee:create",
       },
     ],
   },
@@ -267,7 +283,7 @@ const MENU_TREE: readonly MenuSection[] = [
     items: [
       {
         key: "LoyaltyConfig",
-        label: "Cấu hình",
+        label: "Cấu hình tích điểm",
         icon: "gift-outline",
         permission: "loyalty:manage",
       },
@@ -279,31 +295,25 @@ const MENU_TREE: readonly MenuSection[] = [
     items: [
       {
         key: "ReportsDashboard",
-        label: "BC tổng quan",
+        label: "Báo cáo tổng quan",
         icon: "podium-outline",
         permission: "reports:financial:view",
       },
       {
         key: "RevenueReport",
-        label: "BC doanh thu",
+        label: "Báo cáo doanh thu chi tiết",
         icon: "trending-up-outline",
         permission: "reports:revenue:view",
       },
       {
         key: "InventoryReport",
-        label: "BC tồn kho",
+        label: "Báo cáo tồn kho",
         icon: "cube-outline",
         permission: "inventory:stock-check:view",
       },
       {
-        key: "TaxReport",
-        label: "Kê khai thuế",
-        icon: "newspaper-outline",
-        permission: "tax:preview",
-      },
-      {
         key: "TopProductsReport",
-        label: "Top SP",
+        label: "Top sản phẩm bán chạy",
         icon: "trophy-outline",
         permission: "reports:top-products",
       },
@@ -314,12 +324,6 @@ const MENU_TREE: readonly MenuSection[] = [
     icon: "settings",
     items: [
       {
-        key: "ProfileScreen",
-        label: "Hồ sơ cá nhân",
-        icon: "person-outline",
-        permission: "users:view",
-      },
-      {
         key: "Subscription",
         label: "Gói hiện tại",
         icon: "card-outline",
@@ -327,43 +331,49 @@ const MENU_TREE: readonly MenuSection[] = [
       },
       {
         key: "SubscriptionPricing",
-        label: "Nâng cấp",
+        label: "Nâng cấp Premium",
         icon: "flash-outline",
         permission: "subscription:view",
       },
       {
         key: "ActivityLog",
-        label: "Nhật ký",
+        label: "Nhật ký hoạt động",
         icon: "time-outline",
         permission: "settings:activity-log",
       },
       {
         key: "PaymentMethod",
-        label: "Thanh toán",
+        label: "Thiết lập cổng thanh toán",
         icon: "card-outline",
         permission: "settings:payment-method",
+      },
+      {
+        key: "ProfileScreen",
+        label: "Hồ sơ cá nhân",
+        icon: "person-outline",
+        permission: undefined,
       },
       {
         key: "NotificationSettings",
         label: "Thông báo",
         icon: "notifications-outline",
-        permission: "notifications:view",
+        permission: undefined,
       },
       {
         key: "ExportData",
         label: "Xuất dữ liệu",
         icon: "download-outline",
-        permission: "data:export",
+        permission: "reports:financial:export",
       },
       {
         key: "FileManager",
         label: "Quản lý file",
         icon: "folder-open-outline",
-        permission: "file:view",
+        permission: "files:view",
       },
     ],
   },
-] as const;
+];
 
 // ========== MENU ITEM COMPONENT (MEMOIZED) ==========
 const MenuItemComponent = memo<MenuItemComponentProps>(
@@ -788,7 +798,7 @@ const AppNavigator: FC = (): JSX.Element => {
       />
       <Drawer.Screen
         name="Suppliers"
-        component={withPermission(SupplierListScreen, "supplier:view")}
+        component={withPermission(SupplierListScreen, "suppliers:view")}
         options={{ title: "Nhà cung cấp" }}
       />
       <Drawer.Screen
@@ -810,11 +820,6 @@ const AppNavigator: FC = (): JSX.Element => {
         options={{ title: "Đơn hàng" }}
       />
       <Drawer.Screen
-        name="OrderReconciliation"
-        component={withPermission(OrderReconciliationScreen, "orders:view")}
-        options={{ title: "Đối soát HĐ" }}
-      />
-      <Drawer.Screen
         name="CustomerList"
         component={withPermission(CustomerListScreen, "customers:search")}
         options={{ title: "Khách hàng" }}
@@ -829,7 +834,7 @@ const AppNavigator: FC = (): JSX.Element => {
       />
       <Drawer.Screen
         name="Employees"
-        component={withPermission(EmployeesScreen, "employees:view")}
+        component={withPermission(EmployeesScreen, "store:employee:view")}
         options={{ title: "Nhân viên" }}
       />
       <Drawer.Screen
@@ -843,12 +848,12 @@ const AppNavigator: FC = (): JSX.Element => {
           ReportsDashboardScreen,
           "reports:financial:view"
         )}
-        options={{ title: "BC tổng quan" }}
+        options={{ title: "Báo cáo tổng quan" }}
       />
       <Drawer.Screen
         name="RevenueReport"
         component={withPermission(RevenueReportScreen, "reports:revenue:view")}
-        options={{ title: "BC doanh thu" }}
+        options={{ title: "Báo cáo doanh thu chi tiết" }}
       />
       <Drawer.Screen
         name="InventoryReport"
@@ -856,21 +861,16 @@ const AppNavigator: FC = (): JSX.Element => {
           InventoryReportScreen,
           "inventory:stock-check:view"
         )}
-        options={{ title: "BC tồn kho" }}
-      />
-      <Drawer.Screen
-        name="TaxReport"
-        component={withPermission(TaxDeclarationScreen, "tax:preview")}
-        options={{ title: "Thuế" }}
+        options={{ title: "Báo cáo tồn kho" }}
       />
       <Drawer.Screen
         name="TopProductsReport"
         component={withPermission(TopProductsScreen, "reports:top-products")}
-        options={{ title: "Top SP" }}
+        options={{ title: "Sản phẩm bán chạy" }}
       />
       <Drawer.Screen
         name="ProfileScreen"
-        component={withPermission(ProfileScreen, "users:view")}
+        component={withPermission(ProfileScreen)}
         options={{ title: "Hồ sơ" }}
       />
       <Drawer.Screen
@@ -898,18 +898,64 @@ const AppNavigator: FC = (): JSX.Element => {
       />
       <Drawer.Screen
         name="NotificationSettings"
-        component={withPermission(NotificationScreen, "notifications:view")}
+        component={withPermission(NotificationScreen)}
         options={{ title: "Thông báo" }}
       />
       <Drawer.Screen
         name="ExportData"
-        component={withPermission(ExportDataScreen, "")}
+        component={withPermission(ExportDataScreen, "reports:financial:export")}
         options={{ title: "Xuất Dữ Liệu" }}
       />
       <Drawer.Screen
         name="FileManager"
-        component={withPermission(FileManagerScreen, "file:view")}
+        component={withPermission(FileManagerScreen, "files:view")}
         options={{ title: "Quản lý file" }}
+      />
+      {/* New screens */}
+      <Drawer.Screen
+        name="WarehouseList"
+        component={withPermission(WarehouseListScreen, "warehouses:view")}
+        options={{ title: "Kho hàng" }}
+      />
+      <Drawer.Screen
+        name="InventoryVoucherList"
+        component={withPermission(
+          InventoryVoucherListScreen,
+          "inventory:voucher:view"
+        )}
+        options={{ title: "Phiếu nhập/xuất kho" }}
+      />
+      <Drawer.Screen
+        name="WarehouseForm"
+        component={withPermission(WarehouseFormScreen, "warehouses:view")}
+        options={{
+          headerShown: false,
+          drawerItemStyle: { display: "none" },
+        }}
+      />
+      <Drawer.Screen
+        name="InventoryVoucherForm"
+        component={withPermission(InventoryVoucherFormScreen, "inventory:voucher:create")}
+        options={{
+          headerShown: false,
+          drawerItemStyle: { display: "none" },
+        }}
+      />
+      <Drawer.Screen
+        name="InventoryVoucherDetail"
+        component={withPermission(InventoryVoucherDetailScreen, "inventory:voucher:view")}
+        options={{
+          headerShown: false,
+          drawerItemStyle: { display: "none" },
+        }}
+      />
+      <Drawer.Screen
+        name="ProcessExpired"
+        component={withPermission(ProcessExpiredScreen, "inventory:voucher:create")}
+        options={{
+          headerShown: false,
+          drawerItemStyle: { display: "none" },
+        }}
       />
     </Drawer.Navigator>
   );

@@ -1,12 +1,23 @@
 // src/pages/report/RevenueReport.jsx
 import React, { useState, useEffect } from "react";
 import { Card, Col, Row, Select, DatePicker, Statistic, Table, Spin, Alert, Space, Button, Tooltip, message, Typography } from "antd";
-import { DownloadOutlined, FileExcelOutlined, DollarOutlined, ShoppingOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import {
+  DownloadOutlined,
+  FileExcelOutlined,
+  FilePdfOutlined,
+  CaretDownOutlined,
+  DollarOutlined,
+  ShoppingOutlined,
+  InfoCircleOutlined,
+} from "@ant-design/icons";
+import { Dropdown, Menu } from "antd";
 import axios from "axios";
 import dayjs from "dayjs";
 import quarterOfYear from "dayjs/plugin/quarterOfYear";
 import "dayjs/locale/vi";
 import Layout from "../../components/Layout";
+import { useAuth } from "../../context/AuthContext";
+import { useLocation } from "react-router-dom";
 
 dayjs.extend(quarterOfYear);
 dayjs.locale("vi");
@@ -25,6 +36,11 @@ const REPORT_TYPES = {
 };
 
 const RevenueReport = () => {
+  const { currentStore: authStore } = useAuth();
+  const location = useLocation();
+  const queryParams = new URLSearchParams(location.search);
+  const urlStoreId = queryParams.get("storeId");
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [summary, setSummary] = useState(null);
@@ -33,8 +49,8 @@ const RevenueReport = () => {
   const [pagination, setPagination] = useState({ current: 1, pageSize: 10, total: 0 });
   const [reportPagination, setReportPagination] = useState({ current: 1, pageSize: 10 });
 
-  // Lấy từ localStorage
-  const currentStore = JSON.parse(localStorage.getItem("currentStore") || "{}");
+  // Ưu tiên store từ AuthContext, sau đó đến URL, cuối cùng là localStorage fallback
+  const currentStore = authStore || (urlStoreId ? { _id: urlStoreId } : JSON.parse(localStorage.getItem("currentStore") || "{}"));
 
   // Filter
   const [reportType, setReportType] = useState(REPORT_TYPES.MONTHLY_SUMMARY);
@@ -52,7 +68,7 @@ const RevenueReport = () => {
 
   // Format VND
   const formatVND = (value) => {
-    if (!value) return "₫0";
+    if (!value) return "0";
     const num = typeof value === "object" ? value.$numberDecimal : value;
     return new Intl.NumberFormat("vi-VN", {
       style: "currency",
@@ -124,7 +140,8 @@ const RevenueReport = () => {
         const res = await axios.get(`${apiUrl}/revenues/daily-products?storeId=${currentStore._id}&date=${date}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
-        setSummary(null);
+        // Lưu tổng discount vào summary để hiển thị ở footer
+        setSummary({ totalDailyDiscount: res.data.totalDailyDiscount || 0 });
         setEmployeeData([]);
         setReportRows(res.data.data || []);
         return;
@@ -215,8 +232,8 @@ const RevenueReport = () => {
     setPagination((prev) => ({ ...prev, current: 1 }));
   }, [reportType, periodKey, periodType]);
 
-  // EXPORT ra excel
-  const handleExportExcel = async () => {
+  // EXPORT ra file
+  const handleExport = async (format) => {
     if (!currentStore?._id) {
       message.warning("Chưa chọn cửa hàng");
       return;
@@ -233,29 +250,29 @@ const RevenueReport = () => {
 
       if (reportType === REPORT_TYPES.MONTHLY_SUMMARY) {
         const year = selectedYear.year();
-        const params = new URLSearchParams({ storeId: currentStore._id, year: String(year), format: "xlsx" });
+        const params = new URLSearchParams({ storeId: currentStore._id, year: String(year), format });
         url = `${apiUrl}/revenues/export-monthly-summary?${params.toString()}`;
-        fileName = `${reportName}_${exportDate}_${exporterName}.xlsx`;
+        fileName = `${reportName}_${exportDate}_${exporterName}.${format}`;
       } else if (reportType === REPORT_TYPES.DAILY_PRODUCTS) {
         const date = selectedDate.format("YYYY-MM-DD");
-        const params = new URLSearchParams({ storeId: currentStore._id, date, format: "xlsx" });
+        const params = new URLSearchParams({ storeId: currentStore._id, date, format });
         url = `${apiUrl}/revenues/export-daily-products?${params.toString()}`;
-        fileName = `${reportName}_${exportDate}_${exporterName}.xlsx`;
+        fileName = `${reportName}_${exportDate}_${exporterName}.${format}`;
       } else if (reportType === REPORT_TYPES.YEARLY_PRODUCTGROUP_PRODUCTS) {
         const year = selectedYear.year();
-        const params = new URLSearchParams({ storeId: currentStore._id, year: String(year), format: "xlsx" });
+        const params = new URLSearchParams({ storeId: currentStore._id, year: String(year), format });
         url = `${apiUrl}/revenues/export-yearly-productgroup-products?${params.toString()}`;
-        fileName = `${reportName}_${exportDate}_${exporterName}.xlsx`;
+        fileName = `${reportName}_${exportDate}_${exporterName}.${format}`;
       } else {
         // Báo cáo chi tiết kiểu cũ
         if (!periodKey) {
           message.warning("Vui lòng chọn kỳ báo cáo");
           return;
         }
-        const params = new URLSearchParams({ storeId: currentStore._id, periodType, periodKey, format: "xlsx" });
+        const params = new URLSearchParams({ storeId: currentStore._id, periodType, periodKey, format });
         url = `${apiUrl}/revenues/export?${params.toString()}`;
         // Kì xuất chỉ có nếu là báo cáo chi tiết
-        fileName = `${reportName}_${exportDate}_${exporterName}_${String(periodKey).replace(/[\\/:*?\"<>|]/g, "-")}.xlsx`;
+        fileName = `${reportName}_${exportDate}_${exporterName}_${String(periodKey).replace(/[\\/:*?\"<>|]/g, "-")}.${format}`;
       }
 
       const res = await axios.get(url, {
@@ -263,13 +280,15 @@ const RevenueReport = () => {
         responseType: "blob",
       });
 
-      const blob = new Blob([res.data], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const blob = new Blob([res.data], {
+        type: format === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
       const link = document.createElement("a");
       link.href = window.URL.createObjectURL(blob);
       link.download = fileName;
       link.click();
 
-      message.success("Xuất Excel thành công!");
+      message.success(`Xuất ${format.toUpperCase()} thành công!`);
     } catch (err) {
       let msg = "Lỗi xuất file Excel";
       try {
@@ -303,6 +322,16 @@ const RevenueReport = () => {
     return num; // fallback nếu không đủ 10 số
   };
 
+  const formatPeriodTypeVi = (t) => {
+    const v = String(t || "").toLowerCase();
+    if (v === "day") return "Ngày";
+    if (v === "month") return "Tháng";
+    if (v === "quarter") return "Quý";
+    if (v === "year") return "Năm";
+    if (!v) return "—";
+    return v.charAt(0).toUpperCase() + v.slice(1);
+  };
+
   // TABLE COLUMNS
   const totalRevenueNum = toNumber(summary?.totalRevenue);
 
@@ -313,7 +342,7 @@ const RevenueReport = () => {
       dataIndex: "periodType",
       key: "periodType",
       width: 120,
-      render: (t) => <span style={{ fontSize: 16, fontWeight: 600 }}>{t}</span>,
+      render: (t) => <span style={{ fontSize: 16, fontWeight: 600 }}>{formatPeriodTypeVi(t)}</span>,
     },
     {
       title: <span style={{ fontSize: "16px", fontWeight: 600 }}>Mã kỳ</span>,
@@ -352,7 +381,7 @@ const RevenueReport = () => {
       render: (v) => <span style={{ fontSize: 16, color: "#52c41a", fontWeight: 700 }}>{v}</span>,
     },
     {
-      title: <span style={{ fontSize: "16px", fontWeight: 600 }}>Hoàn tất</span>,
+      title: <span style={{ fontSize: "16px", fontWeight: 600 }}>Đơn đã hoàn tất</span>,
       dataIndex: "completedOrders",
       key: "completedOrders",
       align: "center",
@@ -360,7 +389,7 @@ const RevenueReport = () => {
       render: (v) => <span style={{ fontSize: 16 }}>{v ?? 0}</span>,
     },
     {
-      title: <span style={{ fontSize: "16px", fontWeight: 600 }}>Hoàn 1 phần</span>,
+      title: <span style={{ fontSize: "16px", fontWeight: 600 }}>Đơn hoàn 1 phần</span>,
       dataIndex: "partialRefundOrders",
       key: "partialRefundOrders",
       align: "center",
@@ -399,15 +428,15 @@ const RevenueReport = () => {
       key: "orderCount",
       align: "right",
       width: 140,
-      render: (v, r) => <span style={{ fontSize: 16 }}>{r?.isTotal ? "—" : v ?? 0}</span>,
+      render: (v, r) => <span style={{ fontSize: 16, fontWeight: r?.isTotal ? 700 : 400 }}>{v ?? 0}</span>,
     },
     {
-      title: <span style={{ fontSize: "16px", fontWeight: 600 }}>Tổng số sản phẩm bán</span>,
+      title: <span style={{ fontSize: "16px", fontWeight: 600 }}>Tổng số lượng sản phẩm bán</span>,
       dataIndex: "itemsSold",
       key: "itemsSold",
       align: "right",
       width: 190,
-      render: (v, r) => <span style={{ fontSize: 16 }}>{r?.isTotal ? "—" : v ?? 0}</span>,
+      render: (v, r) => <span style={{ fontSize: 16, fontWeight: r?.isTotal ? 700 : 400 }}>{v ?? 0}</span>,
     },
     {
       title: <span style={{ fontSize: "16px", fontWeight: 600 }}>Doanh thu trung bình / ngày</span>,
@@ -415,7 +444,7 @@ const RevenueReport = () => {
       key: "avgRevenuePerDay",
       align: "right",
       width: 220,
-      render: (v, r) => <span style={{ fontSize: 16 }}>{r?.isTotal ? "—" : formatVND(v)}</span>,
+      render: (v, r) => <span style={{ fontSize: 16, fontWeight: r?.isTotal ? 700 : 400 }}>{r?.isTotal ? "—" : formatVND(v)}</span>,
     },
     {
       title: <span style={{ fontSize: "16px", fontWeight: 600 }}>So với tháng trước (+/−)</span>,
@@ -424,7 +453,7 @@ const RevenueReport = () => {
       align: "right",
       width: 210,
       render: (v, r) => {
-        if (r?.isTotal) return <span style={{ fontSize: 16 }}>—</span>;
+        if (r?.isTotal) return <span style={{ fontSize: 16, fontWeight: 700 }}>—</span>;
         const n = toNumber(v);
         const sign = n > 0 ? "+" : "";
         return <span style={{ fontSize: 16 }}>{sign + formatVND(n)}</span>;
@@ -436,6 +465,10 @@ const RevenueReport = () => {
     const rows = Array.isArray(reportRows) ? reportRows : [];
     if (reportType !== REPORT_TYPES.MONTHLY_SUMMARY) return rows;
     const totalRevenue = rows.reduce((sum, r) => sum + toNumber(r.totalRevenue), 0);
+    const totalOrderCount = rows.reduce((sum, r) => sum + toNumber(r.orderCount), 0);
+    const totalItemsSold = rows.reduce((sum, r) => sum + toNumber(r.itemsSold), 0);
+    const totalAvgRevenuePerDay = rows.reduce((sum, r) => sum + toNumber(r.avgRevenuePerDay), 0);
+    const totalDiffVsPrevMonth = rows.reduce((sum, r) => sum + toNumber(r.diffVsPrevMonth), 0);
 
     return [
       ...rows,
@@ -443,8 +476,8 @@ const RevenueReport = () => {
         isTotal: true,
         monthLabel: "Tổng cộng",
         totalRevenue,
-        orderCount: null,
-        itemsSold: null,
+        orderCount: totalOrderCount,
+        itemsSold: totalItemsSold,
         avgRevenuePerDay: null,
         diffVsPrevMonth: null,
       },
@@ -477,7 +510,7 @@ const RevenueReport = () => {
       width: 110,
     },
     {
-      title: <span style={{ fontSize: "16px", fontWeight: 600 }}>Tổng</span>,
+      title: <span style={{ fontSize: "16px", fontWeight: 600 }}>Tổng doanh thu</span>,
       dataIndex: "grossTotal",
       key: "grossTotal",
       align: "right",
@@ -485,15 +518,7 @@ const RevenueReport = () => {
       render: (v) => <span style={{ fontSize: 16 }}>{formatVND(v)}</span>,
     },
     {
-      title: <span style={{ fontSize: "16px", fontWeight: 600 }}>Tổng giảm</span>,
-      dataIndex: "discountAmount",
-      key: "discountAmount",
-      align: "right",
-      width: 160,
-      render: (v) => <span style={{ fontSize: 16 }}>{formatVND(v)}</span>,
-    },
-    {
-      title: <span style={{ fontSize: "16px", fontWeight: 600 }}>Thực thu</span>,
+      title: <span style={{ fontSize: "16px", fontWeight: 600 }}>Thực thu ( tính VAT)</span>,
       dataIndex: "netTotal",
       key: "netTotal",
       align: "right",
@@ -561,7 +586,7 @@ const RevenueReport = () => {
       dataIndex: "periodType",
       key: "periodType",
       width: 90,
-      render: (t) => <span style={{ fontSize: 16 }}>{t || periodType}</span>,
+      render: (t) => <span style={{ fontSize: 16 }}>{formatPeriodTypeVi(t || periodType)}</span>,
     },
     {
       title: <span style={{ fontSize: "16px", fontWeight: 600 }}>Mã kỳ</span>,
@@ -724,14 +749,14 @@ const RevenueReport = () => {
                         !periodKey
                           ? null
                           : periodType === "day"
-                          ? dayjs(periodKey, "YYYY-MM-DD")
-                          : periodType === "month"
-                          ? dayjs(periodKey, "YYYY-MM")
-                          : periodType === "quarter"
-                          ? dayjs(periodKey.replace("Q", ""), "YYYY-Q")
-                          : periodType === "year"
-                          ? dayjs(periodKey, "YYYY")
-                          : null
+                            ? dayjs(periodKey, "YYYY-MM-DD")
+                            : periodType === "month"
+                              ? dayjs(periodKey, "YYYY-MM")
+                              : periodType === "quarter"
+                                ? dayjs(periodKey.replace("Q", ""), "YYYY-Q")
+                                : periodType === "year"
+                                  ? dayjs(periodKey, "YYYY")
+                                  : null
                       }
                       onChange={(date) => {
                         if (!date) {
@@ -753,7 +778,7 @@ const RevenueReport = () => {
                         return "";
                       }}
                       placeholder={`Chọn ${
-                        periodType === "day" ? "ngày" : periodType === "month" ? "tháng" : periodType === "quarter" ? "quý" : "năm"
+                        periodType === "day" ? "Ngày" : periodType === "month" ? "Tháng" : periodType === "quarter" ? "Quý" : "Năm"
                       }`}
                     />
                   ) : reportType === REPORT_TYPES.DAILY_PRODUCTS ? (
@@ -783,9 +808,22 @@ const RevenueReport = () => {
               {/* Nút xuất file */}
               <Col xs={24} sm={12} md={8} lg={4}>
                 <div style={{ display: "flex", flexDirection: "column", height: "100%", justifyContent: "flex-end" }}>
-                  <Button type="primary" icon={<FileExcelOutlined />} onClick={handleExportExcel}>
-                    Xuất Excel
-                  </Button>
+                  <Dropdown
+                    overlay={
+                      <Menu onClick={({ key }) => handleExport(key)}>
+                        <Menu.Item key="xlsx" icon={<FileExcelOutlined />}>
+                          Xuất Excel
+                        </Menu.Item>
+                        <Menu.Item key="pdf" icon={<FilePdfOutlined />}>
+                          Xuất PDF
+                        </Menu.Item>
+                      </Menu>
+                    }
+                  >
+                    <Button type="primary" icon={<DownloadOutlined />}>
+                      Xuất báo cáo <CaretDownOutlined />
+                    </Button>
+                  </Dropdown>
                 </div>
               </Col>
             </Row>
@@ -894,7 +932,7 @@ const RevenueReport = () => {
                 }
                 style={{ border: "1px solid #8c8c8c" }}
               >
-                {/* MÔ TẢ NHẸ */}
+                {/* MÔ TẢ NHẸ
                 <Alert
                   type="info"
                   showIcon
@@ -904,11 +942,10 @@ const RevenueReport = () => {
                   }}
                   message={
                     <span style={{ fontSize: 14 }}>
-                      Bảng này <strong>chỉ thống kê doanh thu từ các hóa đơn do nhân viên trực tiếp bán</strong>. Không bao gồm các hóa đơn do{" "}
-                      <strong>chủ cửa hàng trực tiếp bán</strong>
+                      Bảng này <strong>thống kê doanh thu từ các hóa đơn do nhân viên trực tiếp bán</strong>
                     </span>
                   }
-                />
+                /> */}
 
                 {/* ĐƯỜNG NGĂN */}
                 <div
@@ -964,8 +1001,8 @@ const RevenueReport = () => {
                   {reportType === REPORT_TYPES.MONTHLY_SUMMARY
                     ? "Báo cáo tổng hợp theo tháng"
                     : reportType === REPORT_TYPES.DAILY_PRODUCTS
-                    ? "Báo cáo bán hàng theo ngày"
-                    : "Báo cáo doanh thu hằng năm theo danh mục & sản phẩm"}
+                      ? "Báo cáo bán hàng theo ngày"
+                      : "Báo cáo doanh thu hằng năm theo danh mục & sản phẩm"}
                 </span>
               }
               style={{ border: "1px solid #8c8c8c" }}
@@ -975,10 +1012,17 @@ const RevenueReport = () => {
                   reportType === REPORT_TYPES.MONTHLY_SUMMARY
                     ? monthlySummaryColumns
                     : reportType === REPORT_TYPES.DAILY_PRODUCTS
-                    ? dailyProductColumns
-                    : yearlyGroupedColumns
+                      ? dailyProductColumns
+                      : yearlyGroupedColumns
                 }
-                dataSource={reportTableRows.map((r, idx) => ({ key: idx, ...r }))}
+                dataSource={reportTableRows
+                  .filter((r) => {
+                    if (reportType === REPORT_TYPES.DAILY_PRODUCTS) {
+                      return toNumber(r.quantity) > 0;
+                    }
+                    return true;
+                  })
+                  .map((r, idx) => ({ key: idx, ...r }))}
                 pagination={
                   reportType === REPORT_TYPES.MONTHLY_SUMMARY
                     ? false
@@ -995,6 +1039,77 @@ const RevenueReport = () => {
                 }}
                 scroll={{ x: 1100 }}
                 locale={{ emptyText: <div style={{ color: "#8c8c8c", padding: "20px" }}>Không có dữ liệu</div> }}
+                summary={(pageData) => {
+                  if (reportType !== REPORT_TYPES.DAILY_PRODUCTS) return undefined;
+
+                  // Tính tổng trên toàn bộ dữ liệu (reportRows)
+                  const totalGross = reportRows.reduce((a, b) => a + toNumber(b.grossTotal), 0);
+                  // Tính tổng thực thu từ các item (đã trừ hoàn)
+                  // Lưu ý: netTotal ở đây là (doanh thu item - hoàn item), chưa trừ discount order
+                  const totalNetOfItems = reportRows.reduce((a, b) => a + toNumber(b.netTotal), 0);
+
+                  const totalDiscount = toNumber(summary?.totalDailyDiscount);
+                  const finalRevenue = totalNetOfItems - totalDiscount;
+
+                  return (
+                    <Table.Summary fixed>
+                      {/* Dòng 1: Tổng tiền hàng */}
+                      <Table.Summary.Row style={{ background: "#fff" }}>
+                        <Table.Summary.Cell index={0} colSpan={5}>
+                           <div style={{ textAlign: "right", paddingRight: 8 }}>
+                              <Text type="secondary" style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: 0.5 }}>Tổng tiền hàng:</Text>
+                           </div>
+                        </Table.Summary.Cell>
+                        <Table.Summary.Cell index={1} align="right">
+                          <Text strong style={{ fontSize: 15 }}>{formatVND(totalGross)}</Text>
+                        </Table.Summary.Cell>
+                        <Table.Summary.Cell index={2} align="right">
+                          <Text strong style={{ fontSize: 15 }}>{formatVND(totalNetOfItems)}</Text>
+                        </Table.Summary.Cell>
+                      </Table.Summary.Row>
+
+                      {/* Dòng 2: Giảm giá hóa đơn (chỉ hiện nếu có) */}
+                      {totalDiscount > 0 && (
+                        <Table.Summary.Row style={{ background: "#fff" }}>
+                          <Table.Summary.Cell index={0} colSpan={5} style={{ border: "none" }}>
+                            <div style={{ textAlign: "right", paddingRight: 8 }}>
+                               <Text type="danger" style={{ fontSize: 13 }}>- Giảm giá hóa đơn:</Text>
+                            </div>
+                          </Table.Summary.Cell>
+                          <Table.Summary.Cell index={1} align="right" style={{ border: "none" }}>
+                             {/* Empty cell to maintain alignment */}
+                          </Table.Summary.Cell>
+                          <Table.Summary.Cell index={2} align="right" style={{ border: "none" }}>
+                            <Text type="danger">-{formatVND(totalDiscount)}</Text>
+                          </Table.Summary.Cell>
+                        </Table.Summary.Row>
+                      )}
+
+                      {/* Dòng 3: Doanh thu thực tế (Highlight) */}
+                      <Table.Summary.Row style={{ background: "#fff" }}>
+                        <Table.Summary.Cell index={0} colSpan={5} style={{ borderTop: "2px solid #52c41a" }}>
+                           <div style={{ textAlign: "right", paddingRight: 8, paddingTop: 4 }}>
+                              <Text style={{ fontSize: 16, color: "#389e0d", fontWeight: 800, textTransform: "uppercase" }}>
+                                TỔNG DOANH THU THỰC TẾ:
+                              </Text>
+                           </div>
+                        </Table.Summary.Cell>
+                        <Table.Summary.Cell index={1} align="right" style={{ borderTop: "2px solid #52c41a" }}>
+                             {/* Empty cell to maintain alignment */}
+                        </Table.Summary.Cell>
+                        <Table.Summary.Cell index={2} align="right" style={{ borderTop: "2px solid #52c41a" }}>
+                           <div style={{ paddingTop: 4 }}>
+                               <div style={{ background: "#389e0d", padding: "6px 16px", borderRadius: 4, color: "#fff", display: "inline-block" }}>
+                                  <Text style={{ fontSize: 18, fontWeight: 700, color: "#fff" }}>
+                                    {formatVND(finalRevenue)}
+                                  </Text>
+                               </div>
+                           </div>
+                        </Table.Summary.Cell>
+                      </Table.Summary.Row>
+                    </Table.Summary>
+                  );
+                }}
               />
             </Card>
           )}

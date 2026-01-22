@@ -1,4 +1,3 @@
-// src/components/store/StoreFormModal.jsx
 import React, { useEffect, useRef, useState } from "react";
 import {
   Modal,
@@ -13,12 +12,12 @@ import {
   Card,
   TimePicker,
   InputNumber,
-  AutoComplete,
   message,
   Divider,
   Cascader,
   Tooltip,
   Spin,
+  Popover,
 } from "antd";
 import {
   PlusOutlined,
@@ -33,9 +32,14 @@ import {
   DeleteOutlined,
   SaveOutlined,
   ArrowDownOutlined,
+  AimOutlined,
+  DownOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
-import { fetchProvinces, buildCascaderOptionsNested } from "../../utils/vnProvinces";
+import {
+  fetchProvinces,
+  buildCascaderOptionsNested,
+} from "../../utils/vnProvinces";
 import { fetchLatLngFromAddress } from "../../utils/geocodeNominatim";
 
 const { TextArea } = Input;
@@ -48,16 +52,13 @@ export default function StoreFormModal({
   onSave,
   busy,
   title = "Cửa hàng",
-  fetchAddressSuggestions,
 }) {
   const [form] = Form.useForm();
   const [localTags, setLocalTags] = useState([]);
   const [tagInput, setTagInput] = useState("");
-  const [addrQuery, setAddrQuery] = useState("");
-  const [suggestions, setSuggestions] = useState([]);
   const [imagePreviewError, setImagePreviewError] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const debounceRef = useRef(null);
+  const [fetchingCoords, setFetchingCoords] = useState(false);
 
   // Scroll enhancements
   const modalBodyRef = useRef(null);
@@ -66,11 +67,12 @@ export default function StoreFormModal({
   // VN administrative cascader
   const [vnOptions, setVnOptions] = useState([]);
   const [vnLoading, setVnLoading] = useState(false);
-  const [vnAdmin, setVnAdmin] = useState({
-    province: "",
-    district: "",
-    ward: "",
-  });
+  const [cascaderValue, setCascaderValue] = useState(undefined);
+  const [cascaderVisible, setCascaderVisible] = useState(false);
+
+  // 👉 SỬA LỖI: Thêm state riêng cho address để force re-render
+  const [addressValue, setAddressValue] = useState("");
+  const geocodeTimerRef = useRef(null); // 👈 Timer cho debounce geocode
 
   // Load VN provinces on mount
   useEffect(() => {
@@ -83,9 +85,10 @@ export default function StoreFormModal({
     try {
       const data = await fetchProvinces(2);
       const options = buildCascaderOptionsNested(data);
+      console.log(" Loaded VN options:", options.length, "provinces");
       setVnOptions(options);
     } catch (e) {
-      console.error(e);
+      console.error(" Load provinces error:", e);
       message.error("Không tải được danh sách tỉnh/thành");
     } finally {
       setVnLoading(false);
@@ -96,6 +99,7 @@ export default function StoreFormModal({
   useEffect(() => {
     if (!open) return;
 
+    // Chỉ reset form khi lần đầu mở hoặc formData thực sự thay đổi từ bên ngoài (không phải do gõ phím)
     const normalized = {
       ...formData,
       openingHours: formData.openingHours || { open: "", close: "" },
@@ -103,57 +107,41 @@ export default function StoreFormModal({
       tags: Array.isArray(formData.tags)
         ? formData.tags
         : formData.tagsCsv
-          ? formData.tagsCsv.split(",").map((t) => t.trim()).filter(Boolean)
-          : [],
+        ? formData.tagsCsv
+            .split(",")
+            .map((t) => t.trim())
+            .filter(Boolean)
+        : [],
     };
+
+    console.log(" Initializing form data:", normalized);
+
+    const initialAddress = normalized.address || "";
+    setAddressValue(initialAddress);
 
     form.setFieldsValue({
       name: normalized.name || "",
-      address: normalized.address || "",
+      address: initialAddress,
       phone: normalized.phone || "",
       description: normalized.description || "",
       imageUrl: normalized.imageUrl || "",
-      openTime: normalized.openingHours.open ? dayjs(normalized.openingHours.open, "HH:mm") : null,
-      closeTime: normalized.openingHours.close ? dayjs(normalized.openingHours.close, "HH:mm") : null,
+      openTime: normalized.openingHours.open
+        ? dayjs(normalized.openingHours.open, "HH:mm")
+        : null,
+      closeTime: normalized.openingHours.close
+        ? dayjs(normalized.openingHours.close, "HH:mm")
+        : null,
       lat: normalized.location.lat,
       lng: normalized.location.lng,
-      vnArea: normalizeToCascader(normalized),
     });
 
     setLocalTags(normalized.tags);
-    setAddrQuery(normalized.address || "");
     setImagePreviewError(false);
+    setCascaderValue(undefined);
+    setCascaderVisible(false);
 
-    setTimeout(() => calcScrollHint(), 0);
-    setTimeout(() => calcScrollHint(), 100);
     setTimeout(() => calcScrollHint(), 300);
-  }, [open, formData, form]);
-
-  // Address suggestions with debounce
-  useEffect(() => {
-    if (!fetchAddressSuggestions || !addrQuery || addrQuery.trim().length < 2) {
-      setSuggestions([]);
-      return;
-    }
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(async () => {
-      try {
-        const res = await fetchAddressSuggestions(addrQuery.trim());
-        const options = (Array.isArray(res) ? res : []).map((s) => ({
-          value: s.address || s.text || s.place_name || s.description || s,
-          label: s.address || s.text || s.place_name || s.description || s,
-          data: s,
-        }));
-        setSuggestions(options);
-      } catch (err) {
-        console.warn(err);
-        setSuggestions([]);
-      }
-    }, 300);
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [addrQuery, fetchAddressSuggestions]);
+  }, [open]); // 👈 CHỈ CHẠY KHI MỞ MODAL (Tránh mất data khi formData prop thay đổi sau đó)
 
   // Scroll hint visibility
   const calcScrollHint = () => {
@@ -168,9 +156,9 @@ export default function StoreFormModal({
     const clientHeight = el.clientHeight;
     const scrollableHeight = scrollHeight - clientHeight;
 
-    // Threshold: còn > 20px chưa cuộn hết thì vẫn hiện
     const threshold = 20;
-    const needHint = scrollableHeight > threshold && scrollTop < scrollableHeight - threshold;
+    const needHint =
+      scrollableHeight > threshold && scrollTop < scrollableHeight - threshold;
 
     setShowScrollHint(needHint);
   };
@@ -184,7 +172,6 @@ export default function StoreFormModal({
 
     el.scrollBy({ top: scrollAmount, behavior: "smooth" });
 
-    // Recalc sau khi scroll xong
     setTimeout(() => calcScrollHint(), 400);
   };
 
@@ -228,6 +215,7 @@ export default function StoreFormModal({
       reader.onload = (e) => {
         const dataUrl = e.target.result;
         form.setFieldsValue({ imageUrl: dataUrl });
+        // Cập nhật imageUrl cho formData của parent (để khi SAVE nó có data)
         setForm((prev) => ({ ...prev, imageUrl: dataUrl }));
         setImagePreviewError(false);
         setUploading(false);
@@ -274,56 +262,142 @@ export default function StoreFormModal({
     setTimeout(() => calcScrollHint(), 50);
   };
 
-  // Address selection from suggestions
-  const onAddrSelect = (value, option) => {
-    const sug = option.data;
-    form.setFieldsValue({ address: value });
-    setAddrQuery(value);
-    if (sug && (sug.lat != null || sug.lng != null)) {
-      form.setFieldsValue({
-        lat: sug.lat,
-        lng: sug.lng,
-      });
-    }
-    setSuggestions([]);
-  };
-
-  // VN Cascader change
+  // ========== 👇 XỬ LÝ CASCADER → GHI VÀO ADDRESS 👇 ==========
   const onVnAreaChange = async (values, selectedOptions) => {
-    if (!values || values.length === 0) return;
+    console.log("🔄 Cascader onChange:", values, selectedOptions);
 
-    const [provCode, distCode, wardCode] = values;
+    // CHỈ XỬ LÝ KHI CHỌN ĐỦ 3 CẤP
+    if (!values || values.length < 3) {
+      console.log("⚠️ Chưa chọn đủ 3 cấp, length:", values?.length);
+      setCascaderValue(values);
+      return;
+    }
+
     const province = selectedOptions?.[0]?.label || "";
     const district = selectedOptions?.[1]?.label || "";
-    const wardName = selectedOptions?.[2]?.label || "";
+    const ward = selectedOptions?.[2]?.label || "";
 
-    setVnAdmin({ province, district, ward: wardName });
+    console.log(" Đã chọn đủ 3 cấp:", { province, district, ward });
 
-    const baseAddress = form.getFieldValue("address") || "";
-    const adminText = [wardName, district, province].filter(Boolean).join(", ");
-    const nextAddress = baseAddress ? `${baseAddress.replace(/\s+,?\s*$/, "")}, ${adminText}` : adminText;
+    // Lấy địa chỉ hiện tại từ state (không phải form)
+    const currentAddress = addressValue;
+    const detailPart = extractDetailFromAddress(currentAddress);
 
-    form.setFieldsValue({ address: nextAddress });
-    setAddrQuery(nextAddress);
+    // Ghép địa chỉ mới
+    const newAddress = [detailPart, ward, district, province]
+      .filter(Boolean)
+      .map((s) => s.trim())
+      .join(", ");
 
+    console.log("📍 Địa chỉ mới:", newAddress);
+    console.log("📍 Địa chỉ cũ:", currentAddress);
+    console.log("📍 Phần số nhà:", detailPart);
+
+    // 👉 SỬA LỖI: Update cả state VÀ form
+    setAddressValue(newAddress);
+    form.setFieldsValue({ address: newAddress });
+
+    // Reset cascader và đóng popover
+    setCascaderValue(undefined);
+    setCascaderVisible(false);
+
+    // Tự động lấy tọa độ
     try {
-      const geo = await fetchLatLngFromAddress(nextAddress);
-      if (geo?.lat && geo?.lng) {
-        form.setFieldsValue({ lat: geo.lat, lng: geo.lng });
+      setFetchingCoords(true); // 👈 Hiển thị loading khi đang lấy tọa độ
+      const geo = await fetchLatLngFromAddress(newAddress);
+      if (geo && geo.lat && geo.lng) {
+        form.setFieldsValue({
+          lat: geo.lat,
+          lng: geo.lng,
+        });
+        message.success(" Đã cập nhật xong địa chỉ và tọa độ");
+      } else {
+        message.success(" Đã cập nhật xong địa chỉ");
       }
     } catch (e) {
-      // ignore
+      console.warn("Không lấy được tọa độ tự động", e);
+      message.success(" Đã cập nhật xong địa chỉ");
+    } finally {
+      setFetchingCoords(false);
     }
   };
+
+  const extractDetailFromAddress = (address) => {
+    if (!address) return "";
+
+    const parts = address.split(",").map((s) => s.trim());
+    const firstPart = parts[0] || "";
+    const adminKeywords = [
+      "phường",
+      "xã",
+      "quận",
+      "huyện",
+      "thành phố",
+      "tỉnh",
+      "ward",
+      "district",
+    ];
+
+    const hasAdminKeyword = adminKeywords.some((keyword) =>
+      firstPart.toLowerCase().includes(keyword)
+    );
+
+    return hasAdminKeyword ? "" : firstPart;
+  };
+  // ========== 👆 END 👆 ==========
+
+  // ========== 👇 HÀM LẤY TỌA ĐỘ 👇 ==========
+  const handleFetchCoordinates = async (forcedAddress = null) => {
+    const address =
+      forcedAddress || addressValue || form.getFieldValue("address");
+
+    if (!address || address.trim().length < 5) {
+      message.warning("Vui lòng nhập địa chỉ trước khi lấy tọa độ");
+      return;
+    }
+
+    setFetchingCoords(true);
+    try {
+      const geo = await fetchLatLngFromAddress(address);
+
+      if (geo && geo.lat && geo.lng) {
+        // Cập nhật cả UI form
+        form.setFieldsValue({
+          lat: geo.lat,
+          lng: geo.lng,
+        });
+        // Và đảm bảo state addressValue khớp với nội dung đang có
+        if (!addressValue) {
+          setAddressValue(address);
+        }
+        message.success(
+          `Đã lấy tọa độ: ${geo.lat.toFixed(6)}, ${geo.lng.toFixed(6)}`
+        );
+      } else {
+        message.warning("Không tìm thấy tọa độ cho địa chỉ này");
+      }
+    } catch (error) {
+      console.error("Error fetching coordinates:", error);
+      message.error("Không thể lấy tọa độ. Vui lòng thử lại");
+    } finally {
+      setFetchingCoords(false);
+    }
+  };
+  // ========== 👆 END 👆 ==========
 
   // Open Google Maps directions
   const openDirections = () => {
+    const address = addressValue || form.getFieldValue("address");
     const values = form.getFieldsValue();
     let url;
     if (values.lat != null && values.lng != null) {
-      url = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${values.lat},${values.lng}`)}`;
-    } else if (values.address) {
-      url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(values.address)}`;
+      url = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+        `${values.lat},${values.lng}`
+      )}`;
+    } else if (address) {
+      url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+        address
+      )}`;
     } else {
       url = "https://www.google.com/maps";
     }
@@ -332,9 +406,11 @@ export default function StoreFormModal({
 
   // Form submission
   const handleFinish = async (values) => {
+    console.log("💾 Submitting form values:", values);
+
     const normalized = {
       name: values.name,
-      address: values.address,
+      address: addressValue || values.address, // 👈 Ưu tiên addressValue
       phone: values.phone || "",
       description: values.description || "",
       imageUrl: values.imageUrl || "",
@@ -345,17 +421,21 @@ export default function StoreFormModal({
         close: values.closeTime ? values.closeTime.format("HH:mm") : "",
       },
       location: {
-        lat: values.lat !== undefined && values.lat !== null && values.lat !== "" ? Number(values.lat) : null,
-        lng: values.lng !== undefined && values.lng !== null && values.lng !== "" ? Number(values.lng) : null,
-      },
-      vnAdmin: {
-        province: vnAdmin.province,
-        district: vnAdmin.district,
-        ward: vnAdmin.ward,
+        lat:
+          values.lat !== undefined && values.lat !== null && values.lat !== ""
+            ? Number(values.lat)
+            : null,
+        lng:
+          values.lng !== undefined && values.lng !== null && values.lng !== ""
+            ? Number(values.lng)
+            : null,
       },
     };
 
-    setForm((prev) => ({ ...prev, ...normalized }));
+    console.log("🚀 Payload chuẩn bị gửi lên server:", normalized);
+
+    // QUAN TRỌNG: Phải update parent state trước khi gọi onSave để đảm bảo sync
+    setForm(normalized);
 
     try {
       if (typeof onSave === "function") {
@@ -370,6 +450,54 @@ export default function StoreFormModal({
 
   const imageSrc = form.getFieldValue("imageUrl") || formData?.imageUrl || "";
   const showImagePreview = !!imageSrc && !imagePreviewError;
+
+  // ========== 👇 CASCADER POPOVER CONTENT 👇 ==========
+  const cascaderContent = (
+    <div style={{ width: 400 }}>
+      <Cascader
+        value={cascaderValue}
+        options={vnOptions}
+        placeholder="Chọn Tỉnh/Thành → Quận/Huyện → Phường/Xã"
+        onChange={onVnAreaChange}
+        changeOnSelect={false}
+        showSearch={{
+          filter: (inputValue, path) =>
+            path.some((option) =>
+              (option.label || "")
+                .toLowerCase()
+                .includes(inputValue.toLowerCase())
+            ),
+        }}
+        style={{ width: "100%" }}
+        size="large"
+        loading={vnLoading}
+        notFoundContent={
+          vnLoading ? (
+            <Spin size="small" />
+          ) : (
+            <div style={{ padding: 12, textAlign: "center", color: "#999" }}>
+              {vnOptions.length === 0
+                ? "Đang tải dữ liệu..."
+                : "Không tìm thấy"}
+            </div>
+          )
+        }
+        disabled={vnLoading || vnOptions.length === 0}
+        expandTrigger="hover"
+      />
+      <div
+        style={{
+          marginTop: 8,
+          fontSize: 12,
+          color: "#999",
+          textAlign: "center",
+        }}
+      >
+        💡 Chọn đủ Tỉnh → Quận → Phường để tự động điền
+      </div>
+    </div>
+  );
+  // ========== 👆 END POPOVER 👆 ==========
 
   return (
     <Modal
@@ -387,12 +515,14 @@ export default function StoreFormModal({
         body: {
           maxHeight: "calc(100vh - 200px)",
           overflowY: "auto",
-          scrollbarWidth: "none",
-          msOverflowStyle: "none",
+          scrollbarWidth: "thin",
           position: "relative",
+          padding: "24px",
+          background: "#fdfdfd",
         },
       }}
-      destroyOnClose
+      maskClosable={false}
+      destroyOnHidden
       afterOpenChange={(visible) => {
         if (visible) {
           setTimeout(() => calcScrollHint(), 100);
@@ -414,7 +544,14 @@ export default function StoreFormModal({
           <Row gutter={24}>
             {/* Left Column */}
             <Col xs={24} md={14}>
-              <Card size="small" style={{ background: "#fafafa", border: "none", borderRadius: 12 }}>
+              <Card
+                size="small"
+                style={{
+                  background: "#fafafa",
+                  border: "none",
+                  borderRadius: 12,
+                }}
+              >
                 {/* Store Name */}
                 <Form.Item
                   label={
@@ -424,82 +561,87 @@ export default function StoreFormModal({
                     </Space>
                   }
                   name="name"
-                  rules={[{ required: true, message: "Vui lòng nhập tên cửa hàng" }]}
+                  rules={[
+                    { required: true, message: "Vui lòng nhập tên cửa hàng" },
+                  ]}
                 >
-                  <Input size="large" placeholder="Nhập tên cửa hàng" style={{ borderRadius: 8 }} />
-                </Form.Item>
-
-                {/* Việt Nam administrative Cascader */}
-                <Form.Item
-                  label={
-                    <Space>
-                      <EnvironmentOutlined style={{ color: "#13c2c2" }} />
-                      <span style={{ fontWeight: 600 }}>Khu vực (Tỉnh/Quận/Phường)</span>
-                    </Space>
-                  }
-                  name="vnArea"
-                >
-                  <Cascader
-                    options={vnOptions}
-                    placeholder="Chọn Tỉnh/Thành → Quận/Huyện → Phường/Xã"
-                    onChange={onVnAreaChange}
-                    changeOnSelect
-                    showSearch={{
-                      filter: (inputValue, path) =>
-                        path.some((option) => (option.label || "").toLowerCase().includes(inputValue.toLowerCase())),
-                    }}
-                    style={{ width: "100%" }}
-                    allowClear
+                  <Input
                     size="large"
-                    loading={vnLoading}
-                    notFoundContent={vnLoading ? <Spin size="small" /> : "Không có dữ liệu"}
+                    placeholder="Nhập tên cửa hàng"
+                    style={{ borderRadius: 8 }}
                   />
                 </Form.Item>
 
-                {/* Address with Suggestions */}
+                {/* ========== 👇 ĐỊA CHỈ VỚI NÚT CHỌN KHU VỰC (CONTROLLED) 👇 ========== */}
                 <Form.Item
                   label={
                     <Space>
                       <EnvironmentOutlined style={{ color: "#1890ff" }} />
-                      <span style={{ fontWeight: 600 }}>Địa chỉ chi tiết</span>
+                      <span style={{ fontWeight: 600 }}>Địa chỉ cửa hàng</span>
                     </Space>
                   }
                   name="address"
                   rules={[{ required: true, message: "Vui lòng nhập địa chỉ" }]}
                 >
-                  <Space.Compact style={{ width: "100%" }} size="large">
-                    <AutoComplete
-                      value={addrQuery}
-                      options={suggestions}
-                      onSelect={onAddrSelect}
-                      onChange={(value) => {
-                        setAddrQuery(value);
-                        form.setFieldsValue({ address: value });
+                  <Space.Compact style={{ width: "100%" }}>
+                    <Input
+                      size="large"
+                      placeholder="Nhập địa chỉ hoặc chọn từ danh sách..."
+                      prefix={
+                        <EnvironmentOutlined style={{ color: "#1890ff" }} />
+                      }
+                      style={{ flex: 1, borderRadius: "8px 0 0 8px" }}
+                      value={addressValue} // 👈 Controlled value
+                      onChange={(e) => {
+                        const newValue = e.target.value;
+                        setAddressValue(newValue);
+                        form.setFieldsValue({ address: newValue });
+
+                        // DEBOUNCE: Tự động geocode sau 1.5s ngừng gõ
+                        if (geocodeTimerRef.current)
+                          clearTimeout(geocodeTimerRef.current);
+                        if (newValue && newValue.length > 10) {
+                          geocodeTimerRef.current = setTimeout(() => {
+                            handleFetchCoordinates(newValue);
+                          }, 1500);
+                        }
                       }}
-                      placeholder="Số nhà, đường..."
-                      style={{ flex: 1 }}
-                      popupMatchSelectWidth={600}
+                    />
+                    <Popover
+                      content={cascaderContent}
+                      title={
+                        <Space>
+                          <GlobalOutlined style={{ color: "#13c2c2" }} />
+                          <span>Chọn khu vực</span>
+                        </Space>
+                      }
+                      trigger="click"
+                      open={cascaderVisible}
+                      onOpenChange={setCascaderVisible}
+                      placement="bottomRight"
+                      overlayStyle={{ width: 420 }}
                     >
-                      <Input size="large" style={{ borderRadius: "8px 0 0 8px" }} />
-                    </AutoComplete>
-                    <Button
-                      type="primary"
-                      icon={<EnvironmentOutlined />}
-                      onClick={openDirections}
-                      style={{
-                        background: "#52c41a",
-                        borderColor: "#52c41a",
-                        borderRadius: "0 8px 8px 0",
-                      }}
-                    >
-                      Chỉ đường
-                    </Button>
+                      <Tooltip title="Chọn khu vực từ danh sách">
+                        <Button
+                          size="large"
+                          type="default"
+                          icon={<DownOutlined />}
+                          style={{
+                            borderRadius: "0 8px 8px 0",
+                            borderLeft: "none",
+                          }}
+                        >
+                          Chọn KV
+                        </Button>
+                      </Tooltip>
+                    </Popover>
                   </Space.Compact>
                 </Form.Item>
+                {/* ========== 👆 END ĐỊA CHỈ 👆 ========== */}
 
-                {/* Lat/Lng */}
-                <Row gutter={12}>
-                  <Col span={12}>
+                {/* ========== 👇 TỌA ĐỘ VỚI NÚT LẤY TỌA ĐỘ 👇 ========== */}
+                {/* <Row gutter={12}>
+                  <Col span={10}>
                     <Form.Item
                       label={
                         <Space>
@@ -517,7 +659,7 @@ export default function StoreFormModal({
                       />
                     </Form.Item>
                   </Col>
-                  <Col span={12}>
+                  <Col span={10}>
                     <Form.Item
                       label={
                         <Space>
@@ -535,7 +677,28 @@ export default function StoreFormModal({
                       />
                     </Form.Item>
                   </Col>
-                </Row>
+                  <Col span={4}>
+                    <Form.Item label=" ">
+                      <Tooltip title="Lấy tọa độ từ địa chỉ">
+                        <Button
+                          type="primary"
+                          icon={<AimOutlined />}
+                          size="large"
+                          loading={fetchingCoords}
+                          onClick={handleFetchCoordinates}
+                          style={{
+                            width: "100%",
+                            height: 40,
+                            borderRadius: 8,
+                            background: "linear-gradient(135deg, #1890ff 0%, #36cfc9 100%)",
+                            border: "none",
+                          }}
+                        />
+                      </Tooltip>
+                    </Form.Item>
+                  </Col>
+                </Row> */}
+                {/* ========== 👆 END TỌA ĐỘ 👆 ========== */}
 
                 {/* Phone */}
                 <Form.Item
@@ -553,7 +716,11 @@ export default function StoreFormModal({
                     },
                   ]}
                 >
-                  <Input size="large" placeholder="Nhập số điện thoại" style={{ borderRadius: 8 }} />
+                  <Input
+                    size="large"
+                    placeholder="Nhập số điện thoại"
+                    style={{ borderRadius: 8 }}
+                  />
                 </Form.Item>
 
                 {/* Opening Hours */}
@@ -597,8 +764,15 @@ export default function StoreFormModal({
                 </Row>
 
                 {/* Description */}
-                <Form.Item label={<span style={{ fontWeight: 600 }}>Mô tả</span>} name="description">
-                  <TextArea rows={4} placeholder="Nhập mô tả về cửa hàng" style={{ borderRadius: 8 }} />
+                <Form.Item
+                  label={<span style={{ fontWeight: 600 }}>Mô tả</span>}
+                  name="description"
+                >
+                  <TextArea
+                    rows={4}
+                    placeholder="Nhập mô tả về cửa hàng"
+                    style={{ borderRadius: 8 }}
+                  />
                 </Form.Item>
 
                 {/* Tags */}
@@ -692,15 +866,27 @@ export default function StoreFormModal({
                     />
                   ) : (
                     <div style={{ textAlign: "center", color: "#8c8c8c" }}>
-                      <CameraOutlined style={{ fontSize: 48, marginBottom: 12 }} />
+                      <CameraOutlined
+                        style={{ fontSize: 48, marginBottom: 12 }}
+                      />
                       <div>{uploading ? "Đang tải..." : "Chưa có ảnh"}</div>
                     </div>
                   )}
                 </div>
 
                 <Space direction="vertical" size={12} style={{ width: "100%" }}>
-                  <Upload accept="image/*" beforeUpload={handleFileUpload} showUploadList={false}>
-                    <Button icon={<UploadOutlined />} block size="large" loading={uploading} style={{ borderRadius: 8 }}>
+                  <Upload
+                    accept="image/*"
+                    beforeUpload={handleFileUpload}
+                    showUploadList={false}
+                  >
+                    <Button
+                      icon={<UploadOutlined />}
+                      block
+                      size="large"
+                      loading={uploading}
+                      style={{ borderRadius: 8 }}
+                    >
                       Chọn file ảnh
                     </Button>
                   </Upload>
@@ -730,7 +916,13 @@ export default function StoreFormModal({
                     </Button>
                   )}
 
-                  <div style={{ fontSize: 12, color: "#8c8c8c", textAlign: "center" }}>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: "#8c8c8c",
+                      textAlign: "center",
+                    }}
+                  >
                     📌 Định dạng: JPG, PNG. Tối đa 8MB
                   </div>
                 </Space>
@@ -742,7 +934,11 @@ export default function StoreFormModal({
           <Divider style={{ margin: "24px 0" }} />
           <Row justify="end" gutter={12}>
             <Col>
-              <Button size="large" onClick={onClose} style={{ borderRadius: 8, minWidth: 120 }}>
+              <Button
+                size="large"
+                onClick={onClose}
+                style={{ borderRadius: 8, minWidth: 120 }}
+              >
                 Hủy
               </Button>
             </Col>
@@ -754,7 +950,8 @@ export default function StoreFormModal({
                 loading={busy || uploading}
                 icon={<SaveOutlined />}
                 style={{
-                  background: "linear-gradient(135deg, #52c41a 0%, #73d13d 100%)",
+                  background:
+                    "linear-gradient(135deg, #52c41a 0%, #73d13d 100%)",
                   border: "none",
                   borderRadius: 8,
                   minWidth: 120,
@@ -768,7 +965,7 @@ export default function StoreFormModal({
         </Form>
       </div>
 
-      {/* Nút scroll hint - CỐ ĐỊNH trong viewport modal, không scroll theo */}
+      {/* Scroll hint button */}
       {showScrollHint && (
         <div
           style={{
@@ -801,13 +998,11 @@ export default function StoreFormModal({
       )}
 
       <style>{`
-        /* Ẩn scrollbar webkit */
         div[ref]::-webkit-scrollbar {
           width: 0px;
           height: 0px;
         }
 
-        /* Bounce animation */
         @keyframes bounce {
           0%, 100% {
             transform: translateY(0);
@@ -819,13 +1014,4 @@ export default function StoreFormModal({
       `}</style>
     </Modal>
   );
-}
-
-// Helper
-function normalizeToCascader(formData) {
-  const prov = formData?.vnAdmin?.province;
-  const dist = formData?.vnAdmin?.district;
-  const ward = formData?.vnAdmin?.ward;
-  if (prov && dist && ward) return [prov, dist, ward];
-  return undefined;
 }

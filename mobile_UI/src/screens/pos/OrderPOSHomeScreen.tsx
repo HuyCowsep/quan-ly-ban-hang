@@ -6,9 +6,11 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { printBill } from "../../utils/printBill";
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   FlatList,
   Image,
   Keyboard,
@@ -16,7 +18,6 @@ import {
   Modal,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -24,158 +25,419 @@ import {
   TextInput,
   View,
   Share,
+  TouchableOpacity,
+  Dimensions,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import apiClient from "../../api/apiClient";
+import notificationService from "../../services/NotificationService";
 
 /** =========================================================
- *  Design tokens (LIGHT / WHITE)
+ *  Design tokens (Professional Design System)
  *  ========================================================= */
 const COLORS = {
-  bg: "#f5f7fb",
+  // Primary colors
+  primary: "#2563eb",
+  primaryLight: "#3b82f6",
+  primaryDark: "#1d4ed8",
+
+  // Background & surfaces
+  bg: "#f8fafc",
   surface: "#ffffff",
   card: "#ffffff",
-  card2: "#f8fafc",
+  cardSecondary: "#f1f5f9",
   stroke: "#e2e8f0",
 
+  // Text colors
   text: "#0f172a",
   textStrong: "#0b1220",
+  textSecondary: "#475569",
   muted: "#64748b",
   placeholder: "#94a3b8",
 
-  primary: "#2563eb",
-  primary2: "#1d4ed8",
-  good: "#16a34a",
-  warn: "#f59e0b",
+  // Status colors
+  success: "#16a34a",
+  successLight: "#dcfce7",
+  warning: "#f59e0b",
+  warningLight: "#fef3c7",
   danger: "#ef4444",
+  dangerLight: "#fee2e2",
+  info: "#0ea5e9",
+  infoLight: "#e0f2fe",
 
+  // UI elements
   chip: "#f1f5f9",
   chipActive: "#dbeafe",
-
   white: "#ffffff",
+  black: "#000000",
 };
 
 const RADIUS = {
-  xs: 10,
-  sm: 12,
-  md: 16,
-  lg: 20,
-  xl: 24,
-};
-
-const SPACING = {
-  xs: 8,
-  sm: 10,
+  xs: 6,
+  sm: 8,
   md: 12,
   lg: 16,
   xl: 20,
+  xxl: 24,
+  round: 999,
 };
 
+const SPACING = {
+  xs: 4,
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 20,
+  xxl: 24,
+  xxxl: 32,
+};
+
+const TYPOGRAPHY = {
+  xs: 10,
+  sm: 12,
+  base: 14,
+  md: 16,
+  lg: 18,
+  xl: 20,
+  xxl: 24,
+  xxxl: 28,
+};
+
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 const SHADOW = Platform.select({
   ios: {
-    shadowColor: "#0f172a",
-    shadowOpacity: 0.08,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 10 },
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
   },
-  android: { elevation: 2 },
+  android: {
+    elevation: 4,
+  },
+});
+
+const SHADOW_LG = Platform.select({
+  ios: {
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 16,
+  },
+  android: {
+    elevation: 8,
+  },
 });
 
 /** =========================================================
- *  Small UI primitives
+ *  UI Components (Memoized for Performance)
  *  ========================================================= */
-const Divider: React.FC<{ style?: any }> = ({ style }) => (
+const Divider = React.memo(({ style }: { style?: any }) => (
   <View style={[{ height: 1, backgroundColor: COLORS.stroke }, style]} />
-);
+));
 
-const Section: React.FC<{
-  title: string;
-  subtitle?: string;
-  right?: React.ReactNode;
-  children?: React.ReactNode;
-}> = React.memo(({ title, subtitle, right, children }) => {
-  return (
-    <View style={styles.sectionCard}>
+const Section = React.memo(
+  ({
+    title,
+    subtitle,
+    right,
+    children,
+  }: {
+    title: string;
+    subtitle?: string;
+    right?: React.ReactNode;
+    children?: React.ReactNode;
+  }) => (
+    <View style={styles.sectionContainer}>
       <View style={styles.sectionHeader}>
-        <View style={{ flex: 1 }}>
+        <View style={styles.sectionTitleContainer}>
           <Text style={styles.sectionTitle}>{title}</Text>
-          {!!subtitle && <Text style={styles.sectionSubtitle}>{subtitle}</Text>}
+          {subtitle && <Text style={styles.sectionSubtitle}>{subtitle}</Text>}
         </View>
         {right}
       </View>
-
-      <View style={{ marginTop: SPACING.md }}>{children}</View>
+      <View style={styles.sectionContent}>{children}</View>
     </View>
-  );
-});
+  )
+);
 
-const Pill: React.FC<{
-  label: string;
-  active?: boolean;
-  onPress?: () => void;
-  right?: React.ReactNode;
-}> = ({ label, active, onPress, right }) => {
-  return (
-    <Pressable
+const Badge = React.memo(
+  ({
+    value,
+    color = COLORS.primary,
+  }: {
+    value: number | string;
+    color?: string;
+  }) => (
+    <View style={[styles.badge, { backgroundColor: color + "20" }]}>
+      <Text style={[styles.badgeText, { color }]}>{value}</Text>
+    </View>
+  )
+);
+
+const Card = React.memo(
+  ({ children, style }: { children: React.ReactNode; style?: any }) => (
+    <View style={[styles.card, style]}>{children}</View>
+  )
+);
+
+const IconButton = React.memo(
+  ({
+    icon,
+    onPress,
+    size = 24,
+    color = COLORS.primary,
+    style,
+  }: {
+    icon: keyof typeof Ionicons.glyphMap;
+    onPress: () => void;
+    size?: number;
+    color?: string;
+    style?: any;
+  }) => (
+    <TouchableOpacity
       onPress={onPress}
-      style={({ pressed }) => [
-        styles.pill,
-        active && styles.pillActive,
-        pressed && { opacity: 0.92, transform: [{ scale: 0.99 }] },
-      ]}
+      style={[styles.iconButton, style]}
       hitSlop={8}
     >
-      <Text style={[styles.pillText, active && styles.pillTextActive]}>
-        {label}
-      </Text>
-      {right}
-    </Pressable>
-  );
-};
+      <Ionicons name={icon} size={size} color={color} />
+    </TouchableOpacity>
+  )
+);
 
-const IconTextButton: React.FC<{
-  text: string;
-  type?: "primary" | "outline" | "danger" | "ghost";
-  onPress?: () => void;
-  disabled?: boolean;
-  right?: React.ReactNode;
-  style?: any;
-}> = ({ text, type = "primary", onPress, disabled, right, style }) => {
-  return (
-    <Pressable
-      onPress={disabled ? undefined : onPress}
-      style={({ pressed }) => [
-        styles.btnBase,
-        type === "primary" && styles.btnPrimary,
-        type === "outline" && styles.btnOutline,
-        type === "danger" && styles.btnDanger,
-        type === "ghost" && styles.btnGhost,
-        disabled && { opacity: 0.55 },
-        pressed && !disabled && { transform: [{ scale: 0.99 }], opacity: 0.96 },
-        style,
-      ]}
-      hitSlop={8}
-    >
-      <Text
+/** =========================================================
+ *  Enhanced Button Component
+ *  ========================================================= */
+const Button = React.memo(
+  ({
+    title,
+    onPress,
+    variant = "primary",
+    size = "md",
+    icon,
+    iconPosition = "left",
+    disabled = false,
+    loading = false,
+    style,
+    fullWidth = false,
+  }: {
+    title: string;
+    onPress: () => void;
+    variant?:
+      | "primary"
+      | "secondary"
+      | "outline"
+      | "danger"
+      | "success"
+      | "ghost";
+    size?: "sm" | "md" | "lg";
+    icon?: keyof typeof Ionicons.glyphMap;
+    iconPosition?: "left" | "right";
+    disabled?: boolean;
+    loading?: boolean;
+    style?: any;
+    fullWidth?: boolean;
+  }) => {
+    const getVariantStyles = () => {
+      switch (variant) {
+        case "primary":
+          return {
+            bg: COLORS.primary,
+            text: COLORS.white,
+            border: COLORS.primary,
+          };
+        case "secondary":
+          return {
+            bg: COLORS.cardSecondary,
+            text: COLORS.text,
+            border: COLORS.stroke,
+          };
+        case "outline":
+          return {
+            bg: "transparent",
+            text: COLORS.primary,
+            border: COLORS.primary,
+          };
+        case "danger":
+          return {
+            bg: COLORS.danger,
+            text: COLORS.white,
+            border: COLORS.danger,
+          };
+        case "success":
+          return {
+            bg: COLORS.success,
+            text: COLORS.white,
+            border: COLORS.success,
+          };
+        case "ghost":
+          return {
+            bg: "transparent",
+            text: COLORS.text,
+            border: "transparent",
+          };
+        default:
+          return {
+            bg: COLORS.primary,
+            text: COLORS.white,
+            border: COLORS.primary,
+          };
+      }
+    };
+
+    const getSizeStyles = () => {
+      switch (size) {
+        case "sm":
+          return { paddingVertical: 8, paddingHorizontal: 12, fontSize: 12 };
+        case "md":
+          return { paddingVertical: 12, paddingHorizontal: 16, fontSize: 14 };
+        case "lg":
+          return { paddingVertical: 16, paddingHorizontal: 20, fontSize: 16 };
+        default:
+          return { paddingVertical: 12, paddingHorizontal: 16, fontSize: 14 };
+      }
+    };
+
+    const variantStyles = getVariantStyles();
+    const sizeStyles = getSizeStyles();
+
+    return (
+      <TouchableOpacity
+        onPress={onPress}
+        disabled={disabled || loading}
+        activeOpacity={0.8}
         style={[
-          styles.btnTextBase,
-          type === "primary" && styles.btnTextPrimary,
-          type === "outline" && styles.btnTextOutline,
-          type === "danger" && styles.btnTextDanger,
-          type === "ghost" && styles.btnTextOutline,
+          styles.buttonBase,
+          {
+            backgroundColor: variantStyles.bg,
+            borderColor: variantStyles.border,
+            borderWidth: variant === "outline" ? 1 : 0,
+            paddingVertical: sizeStyles.paddingVertical,
+            paddingHorizontal: sizeStyles.paddingHorizontal,
+            width: fullWidth ? "100%" : undefined,
+            opacity: disabled ? 0.5 : 1,
+          },
+          style,
         ]}
       >
-        {text}
-      </Text>
-      {right}
-    </Pressable>
-  );
-};
+        {loading ? (
+          <ActivityIndicator size="small" color={variantStyles.text} />
+        ) : (
+          <View style={styles.buttonContent}>
+            {icon && iconPosition === "left" && (
+              <Ionicons
+                name={icon}
+                size={sizeStyles.fontSize}
+                color={variantStyles.text}
+                style={styles.buttonIcon}
+              />
+            )}
+            <Text
+              style={[
+                styles.buttonText,
+                {
+                  color: variantStyles.text,
+                  fontSize: sizeStyles.fontSize,
+                  fontWeight: size === "lg" ? "700" : "600",
+                },
+              ]}
+            >
+              {title}
+            </Text>
+            {icon && iconPosition === "right" && (
+              <Ionicons
+                name={icon}
+                size={sizeStyles.fontSize}
+                color={variantStyles.text}
+                style={styles.buttonIcon}
+              />
+            )}
+          </View>
+        )}
+      </TouchableOpacity>
+    );
+  }
+);
 
-const Badge: React.FC<{ value: number | string }> = ({ value }) => (
-  <View style={styles.badge}>
-    <Text style={styles.badgeText}>{value}</Text>
-  </View>
+/** =========================================================
+ *  Enhanced Input Component
+ *  ========================================================= */
+const Input = React.memo(
+  ({
+    value,
+    onChangeText,
+    placeholder,
+    label,
+    error,
+    secureTextEntry,
+    keyboardType = "default",
+    multiline,
+    numberOfLines,
+    style,
+    leftIcon,
+    rightIcon,
+    editable = true,
+  }: {
+    value: string;
+    onChangeText: (text: string) => void;
+    placeholder?: string;
+    label?: string;
+    error?: string;
+    secureTextEntry?: boolean;
+    keyboardType?: any;
+    multiline?: boolean;
+    numberOfLines?: number;
+    style?: any;
+    leftIcon?: keyof typeof Ionicons.glyphMap;
+    rightIcon?: keyof typeof Ionicons.glyphMap;
+    editable?: boolean;
+  }) => (
+    <View style={styles.inputContainer}>
+      {label && <Text style={styles.inputLabel}>{label}</Text>}
+      <View
+        style={[
+          styles.inputWrapper,
+          error && styles.inputError,
+          !editable && styles.inputDisabled,
+        ]}
+      >
+        {leftIcon && (
+          <Ionicons
+            name={leftIcon}
+            size={20}
+            color={COLORS.muted}
+            style={styles.inputLeftIcon}
+          />
+        )}
+        <TextInput
+          value={value}
+          onChangeText={onChangeText}
+          placeholder={placeholder}
+          placeholderTextColor={COLORS.placeholder}
+          secureTextEntry={secureTextEntry}
+          keyboardType={keyboardType}
+          multiline={multiline}
+          numberOfLines={numberOfLines}
+          editable={editable}
+          style={[
+            styles.inputField,
+            multiline && { height: numberOfLines ? numberOfLines * 24 : 100 },
+            style,
+          ]}
+        />
+        {rightIcon && (
+          <Ionicons
+            name={rightIcon}
+            size={20}
+            color={COLORS.muted}
+            style={styles.inputRightIcon}
+          />
+        )}
+      </View>
+      {error && <Text style={styles.inputErrorText}>{error}</Text>}
+    </View>
+  )
 );
 
 /** =========================================================
@@ -183,6 +445,15 @@ const Badge: React.FC<{ value: number | string }> = ({ value }) => (
  *  ========================================================= */
 type PaymentMethod = "cash" | "qr";
 type SaleType = "NORMAL" | "AT_COST" | "VIP" | "CLEARANCE" | "FREE";
+
+type ProductBatch = {
+  batch_no: string;
+  expiry_date: string | null;
+  cost_price: any;
+  selling_price?: any;
+  quantity: number;
+  created_at?: string;
+};
 
 type Product = {
   _id: string;
@@ -193,6 +464,8 @@ type Product = {
   stock_quantity: number;
   unit: string;
   image?: { url: string };
+  batches?: ProductBatch[];
+  tax_rate?: number;
 };
 
 type Customer = {
@@ -200,11 +473,14 @@ type Customer = {
   name: string;
   phone: string;
   loyaltyPoints: number;
+  email?: string;
+  address?: string;
 };
 
 type Employee = {
   _id: string;
   fullName: string;
+  phone?: string;
   user_id?: {
     _id: string;
     username: string;
@@ -235,34 +511,39 @@ type CartItem = {
   overridePrice?: number | null;
   saleType?: SaleType;
   quantity: number;
-  subtotal: string; // giữ giống web: string .toFixed(2)
+  subtotal: string;
+  tax_rate?: number;
+  stock_quantity?: number;
+  batchId?: string | null;
+  batchCode?: string | null;
+  expiryDate?: string | null;
 };
 
 type OrderTab = {
   key: string;
-
   cart: CartItem[];
   customer: Customer | null;
-  employeeId: string | null; // null = owner/không gán
+  employeeId: string | null;
   usedPoints: number;
   usedPointsEnabled: boolean;
   isVAT: boolean;
   paymentMethod: PaymentMethod;
   cashReceived: number;
-
   pendingOrderId: string | null;
   orderCreatedPaymentMethod: PaymentMethod | null;
   orderCreatedAt: string;
   orderPrintCount: number;
   orderEarnedPoints: number;
-
+  isPaid: boolean;
   qrImageUrl: string | null;
   qrPayload: string | null;
   qrExpiryTs: number | null;
-
   savedQrImageUrl: string | null;
   savedQrPayload: string | null;
   savedQrExpiryTs: number | null;
+  companyName: string;
+  taxCode: string;
+  companyAddress: string;
 };
 
 type OrderResponse = {
@@ -273,6 +554,7 @@ type OrderResponse = {
     paymentMethod: PaymentMethod;
     createdAt?: string;
     printCount?: number;
+    earnedPoints?: number;
   };
   qrDataURL?: string;
   paymentLinkUrl?: string | null;
@@ -281,6 +563,7 @@ type OrderResponse = {
 type LoyaltyConfig = {
   isActive?: boolean;
   vndPerPoint?: number;
+  minPointsToRedeem?: number;
 };
 
 const SALE_TYPE_LABEL: Record<SaleType, string> = {
@@ -292,22 +575,14 @@ const SALE_TYPE_LABEL: Record<SaleType, string> = {
 };
 
 /** =========================================================
- *  Helpers
+ *  Helper Functions
  *  ========================================================= */
-function debounce<F extends (...args: any[]) => any>(func: F, wait: number) {
+const debounce = <F extends (...args: any[]) => any>(func: F, wait: number) => {
   let timeout: ReturnType<typeof setTimeout>;
   return (...args: Parameters<F>) => {
     clearTimeout(timeout);
     timeout = setTimeout(() => func(...args), wait);
   };
-}
-
-const safeParse = (raw: string | null) => {
-  try {
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
 };
 
 const getPriceNumber = (price: any): number => {
@@ -355,17 +630,17 @@ const getItemUnitPrice = (item: CartItem): number => {
   }
   const base = getPriceNumber(item.price);
   const cost = getPriceNumber(item.cost_price);
-
   const saleType = item.saleType || "NORMAL";
+
   switch (saleType) {
     case "NORMAL":
       return base;
     case "VIP":
-      return base; // VIP nhập tay qua overridePrice nếu muốn
+      return base;
     case "AT_COST":
       return cost || base;
     case "CLEARANCE":
-      return cost || base; // Xả kho nhập tay qua overridePrice nếu muốn
+      return cost || base;
     case "FREE":
       return 0;
     default:
@@ -386,20 +661,21 @@ const makeEmptyTab = (
   isVAT: false,
   paymentMethod: "cash",
   cashReceived: 0,
-
   pendingOrderId: null,
   orderCreatedPaymentMethod: null,
   orderCreatedAt: "",
   orderPrintCount: 0,
   orderEarnedPoints: 0,
-
+  isPaid: false,
   qrImageUrl: null,
   qrPayload: null,
   qrExpiryTs: null,
-
   savedQrImageUrl: null,
   savedQrPayload: null,
   savedQrExpiryTs: null,
+  companyName: "",
+  taxCode: "",
+  companyAddress: "",
 });
 
 const clampInt = (raw: string, min = 0, max = Number.MAX_SAFE_INTEGER) => {
@@ -408,35 +684,19 @@ const clampInt = (raw: string, min = 0, max = Number.MAX_SAFE_INTEGER) => {
 };
 
 /** =========================================================
- *  Screen
+ *  Main Screen Component
  *  ========================================================= */
 const OrderPOSHomeScreen: React.FC = () => {
-  // ===== init =====
+  // ===== State Management =====
   const [loadingInit, setLoadingInit] = useState(true);
   const [loading, setLoading] = useState(false);
-
   const [storeId, setStoreId] = useState<string | null>(null);
   const [storeName, setStoreName] = useState("Cửa hàng");
-
+  const [storeInfo, setStoreInfo] = useState<any>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loggedInUser, setLoggedInUser] = useState<any>(null);
 
-  const authHeaders = useMemo(() => {
-    return token ? { Authorization: `Bearer ${token}` } : undefined;
-  }, [token]);
-
-  // refs để tránh stale closure trong debounce
-  const storeIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    storeIdRef.current = storeId;
-  }, [storeId]);
-
-  const authHeadersRef = useRef<any>(undefined);
-  useEffect(() => {
-    authHeadersRef.current = authHeaders;
-  }, [authHeaders]);
-
-  // ===== data =====
+  // Data states
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [currentUserEmployee, setCurrentUserEmployee] = useState<Seller | null>(
     null
@@ -444,16 +704,364 @@ const OrderPOSHomeScreen: React.FC = () => {
   const [loyaltySetting, setLoyaltySetting] = useState<LoyaltyConfig | null>(
     null
   );
+  const [isStoreEmpty, setIsStoreEmpty] = useState(false);
+  const [hasCheckedEmpty, setHasCheckedEmpty] = useState(false);
 
-  // ===== tabs =====
+  // Order tabs
   const [orders, setOrders] = useState<OrderTab[]>([makeEmptyTab("1", null)]);
   const [activeTab, setActiveTab] = useState("1");
 
+  // Search states
+  const [searchProduct, setSearchProduct] = useState("");
+  const [searchedProducts, setSearchedProducts] = useState<Product[]>([]);
+  const [showProductDropdown, setShowProductDropdown] = useState(false);
+  const [productSearchLoading, setProductSearchLoading] = useState(false);
+  const [productSearchError, setProductSearchError] = useState<string | null>(
+    null
+  );
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
+
+  // Customer states
+  const [phoneInput, setPhoneInput] = useState("");
+  const [foundCustomers, setFoundCustomers] = useState<Customer[]>([]);
+  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  const [newCustomerModal, setNewCustomerModal] = useState(false);
+  const [newCustomerName, setNewCustomerName] = useState("");
+  const [newCustomerPhone, setNewCustomerPhone] = useState("");
+  const [newCustomerEmail, setNewCustomerEmail] = useState("");
+
+  // Modal states
+  const [employeeModal, setEmployeeModal] = useState(false);
+  const [qrModal, setQrModal] = useState(false);
+  const [billModal, setBillModal] = useState(false);
+  const [priceEditModal, setPriceEditModal] = useState<{
+    visible: boolean;
+    item?: CartItem;
+    tempSaleType?: SaleType;
+    tempOverridePrice?: number | null;
+  }>({ visible: false });
+
+  const [qrRemainingSec, setQrRemainingSec] = useState<number | null>(null);
+  const [isPrinting, setIsPrinting] = useState(false);
+
+  // Refs
+  const scrollY = useRef(new Animated.Value(0)).current;
+  const scrollViewRef = useRef<ScrollView>(null);
+  const storeIdRef = useRef<string | null>(null);
+  const authHeadersRef = useRef<any>(undefined);
+  const selectingProductRef = useRef(false);
+  const selectingCustomerRef = useRef(false);
+
+  // Current user and storage
+  const currentUserId = loggedInUser?.id || loggedInUser?._id || "anonymous";
+  const CART_STORAGE_KEY = `pos_cart_${storeId}_${currentUserId}`;
+
+  // Auth headers
+  const authHeaders = useMemo(
+    () => (token ? { Authorization: `Bearer ${token}` } : undefined),
+    [token]
+  );
+
+  // Current tab
   const currentTab = useMemo(
     () => orders.find((t) => t.key === activeTab)!,
     [orders, activeTab]
   );
 
+  // ===== Calculations =====
+  const subtotal = useMemo(
+    () =>
+      currentTab.cart.reduce(
+        (sum, item) => sum + getItemUnitPrice(item) * item.quantity,
+        0
+      ),
+    [currentTab.cart]
+  );
+
+  const discount = useMemo(() => {
+    const vndPerPoint = loyaltySetting?.vndPerPoint || 0;
+    return currentTab.usedPointsEnabled
+      ? (currentTab.usedPoints || 0) * vndPerPoint
+      : 0;
+  }, [
+    currentTab.usedPointsEnabled,
+    currentTab.usedPoints,
+    loyaltySetting?.vndPerPoint,
+  ]);
+
+  const beforeTax = Math.max(subtotal - discount, 0);
+
+  const vatAmount = useMemo(() => {
+    return currentTab.cart.reduce((sum, item) => {
+      const itemPrice = getItemUnitPrice(item);
+      const itemTaxRate =
+        item.tax_rate !== undefined && item.tax_rate !== null
+          ? Number(item.tax_rate)
+          : 0;
+      const effectiveRate = itemTaxRate === -1 ? 0 : itemTaxRate;
+      return sum + (itemPrice * item.quantity * effectiveRate) / 100;
+    }, 0);
+  }, [currentTab.cart]);
+
+  const totalAmount = beforeTax + vatAmount;
+  const changeAmount = useMemo(
+    () => Math.max(0, (currentTab.cashReceived || 0) - totalAmount),
+    [currentTab.cashReceived, totalAmount]
+  );
+
+  const employeeLabel = useMemo(() => {
+    if (currentUserEmployee?.isOwner && currentTab.employeeId === null) {
+      return `${currentUserEmployee.fullName} (Chủ cửa hàng)`;
+    }
+    const e = employees.find((x) => x._id === currentTab.employeeId);
+    return e?.fullName || "Chưa chọn";
+  }, [currentUserEmployee, currentTab.employeeId, employees]);
+
+  // ===== Effects =====
+  useEffect(() => {
+    storeIdRef.current = storeId;
+  }, [storeId]);
+
+  useEffect(() => {
+    authHeadersRef.current = authHeaders;
+  }, [authHeaders]);
+
+  // Initialize
+  useEffect(() => {
+    (async () => {
+      try {
+        const [csRaw, tkn, usrRaw] = await Promise.all([
+          AsyncStorage.getItem("currentStore"),
+          AsyncStorage.getItem("token"),
+          AsyncStorage.getItem("user"),
+        ]);
+
+        const cs = csRaw ? JSON.parse(csRaw) : null;
+        const usr = usrRaw ? JSON.parse(usrRaw) : null;
+
+        if (!cs?._id) {
+          Alert.alert("Lỗi", "Không tìm thấy thông tin cửa hàng");
+          setLoadingInit(false);
+          return;
+        }
+
+        setStoreId(cs._id);
+        setStoreName(cs.name || "Cửa hàng");
+        setStoreInfo(cs);
+        setToken(tkn);
+        setLoggedInUser(usr);
+      } catch (error) {
+        Alert.alert("Lỗi", "Không thể tải dữ liệu khởi tạo");
+        console.error("Init error:", error);
+      } finally {
+        setLoadingInit(false);
+      }
+    })();
+  }, []);
+
+  // Load data
+  useEffect(() => {
+    if (!storeId) return;
+    loadEmployees();
+    loadLoyaltySetting();
+    checkStoreProducts();
+  }, [storeId]);
+
+  // Cart persistence
+  useEffect(() => {
+    if (!storeId || !currentUserId) return;
+
+    (async () => {
+      try {
+        const savedData = await AsyncStorage.getItem(CART_STORAGE_KEY);
+        if (savedData) {
+          const parsed = JSON.parse(savedData);
+          if (
+            parsed.orders &&
+            Array.isArray(parsed.orders) &&
+            parsed.orders.length > 0
+          ) {
+            setOrders(parsed.orders);
+            if (parsed.activeTab) setActiveTab(parsed.activeTab);
+          }
+        }
+      } catch (err) {
+        console.error("Lỗi đọc cart:", err);
+      }
+    })();
+  }, [storeId, currentUserId]);
+
+  useEffect(() => {
+    if (!storeId || !currentUserId) return;
+
+    const hasItems = orders.some(
+      (tab) => tab.cart.length > 0 || tab.customer || tab.pendingOrderId
+    );
+
+    if (hasItems) {
+      (async () => {
+        try {
+          const dataToSave = {
+            orders,
+            activeTab,
+            userId: currentUserId,
+            savedAt: new Date().toISOString(),
+          };
+          await AsyncStorage.setItem(
+            CART_STORAGE_KEY,
+            JSON.stringify(dataToSave)
+          );
+        } catch (err) {
+          console.error("Lỗi lưu cart:", err);
+        }
+      })();
+    }
+  }, [orders, activeTab, storeId, currentUserId]);
+
+  // QR countdown
+  useEffect(() => {
+    if (!qrModal) return;
+
+    let countdownId: NodeJS.Timeout | null = null;
+    const expiry = currentTab.qrExpiryTs;
+
+    if (expiry) {
+      const tick = () => {
+        const diff = Math.max(0, Math.floor((expiry - Date.now()) / 1000));
+        setQrRemainingSec(diff);
+
+        if (diff <= 0) {
+          updateOrderTab((t) => {
+            t.qrImageUrl = null;
+            t.qrPayload = null;
+            t.qrExpiryTs = null;
+          });
+          Alert.alert("Hết hạn", "QR đã hết hạn");
+        }
+      };
+
+      tick();
+      countdownId = setInterval(tick, 1000);
+    }
+
+    return () => {
+      if (countdownId) clearInterval(countdownId);
+    };
+  }, [qrModal, currentTab.qrExpiryTs]);
+
+  // ===== API Functions =====
+  const loadEmployees = useCallback(async () => {
+    if (!storeId) return;
+
+    try {
+      const user = loggedInUser;
+      if (!user?.id && !user?._id) return;
+
+      const userId = user?.id || user?._id;
+      const role = user?.role;
+
+      // STAFF: create employee from user data
+      if (role === "STAFF") {
+        const staffEmployee: Seller = {
+          _id: userId,
+          fullName:
+            user?.fullname || user?.fullName || user?.username || "Nhân viên",
+          user_id: {
+            _id: userId,
+            username: user?.username || "staff",
+            role,
+            email: user?.email,
+            phone: user?.phone,
+            menu: user?.menu,
+          },
+        };
+
+        setCurrentUserEmployee(staffEmployee);
+        setEmployees([staffEmployee as Employee]);
+        setOrders((prev) => prev.map((t) => ({ ...t, employeeId: userId })));
+        return;
+      }
+
+      // MANAGER/OWNER: load employees list
+      const res: any = await apiClient.get(`/stores/${storeId}/employees`, {
+        params: { deleted: "false" },
+        headers: authHeaders,
+      });
+
+      const employeesList: Employee[] =
+        res?.data?.employees || res?.data?.data?.employees || [];
+      setEmployees(Array.isArray(employeesList) ? employeesList : []);
+
+      if (role === "MANAGER" || role === "OWNER") {
+        const virtualOwner: VirtualOwner = {
+          _id: "virtual-owner",
+          fullName:
+            user?.fullname ||
+            user?.fullName ||
+            user?.username ||
+            "Chủ cửa hàng",
+          isOwner: true,
+        };
+
+        setCurrentUserEmployee(virtualOwner);
+        setOrders((prev) => prev.map((t) => ({ ...t, employeeId: null })));
+      }
+    } catch (error) {
+      console.error("Lỗi tải nhân viên:", error);
+      Alert.alert("Lỗi", "Không thể tải danh sách nhân viên");
+    }
+  }, [storeId, loggedInUser, authHeaders]);
+
+  const loadLoyaltySetting = useCallback(async () => {
+    if (!storeId) return;
+
+    try {
+      const res: any = await apiClient.get(`/loyaltys/config/${storeId}`, {
+        headers: authHeaders,
+      });
+
+      if (res?.data?.isConfigured && res?.data?.config?.isActive) {
+        setLoyaltySetting(res.data.config);
+      } else {
+        setLoyaltySetting(null);
+      }
+    } catch (error) {
+      console.error("Lỗi tải cài đặt loyalty:", error);
+      setLoyaltySetting(null);
+    }
+  }, [storeId, authHeaders]);
+
+  const checkStoreProducts = useCallback(async () => {
+    if (!storeId) return;
+
+    try {
+      const res: any = await apiClient.get(`/products/store/${storeId}`, {
+        params: { limit: 1 },
+        headers: authHeaders,
+      });
+
+      const products = res?.data?.products || [];
+      const isEmpty = products.length === 0;
+      setIsStoreEmpty(isEmpty);
+      setHasCheckedEmpty(true);
+
+      if (isEmpty) {
+        const isOwner =
+          loggedInUser?.role === "OWNER" || loggedInUser?.role === "MANAGER";
+        Alert.alert(
+          "Kho hàng trống",
+          isOwner
+            ? "Cửa hàng của bạn chưa có sản phẩm nào. Vui lòng nhập hàng trước khi bán."
+            : "Cửa hàng chưa có sản phẩm nào. Vui lòng báo chủ cửa hàng.",
+          [{ text: "OK" }]
+        );
+      }
+    } catch (error) {
+      console.error("Lỗi kiểm tra kho hàng:", error);
+    }
+  }, [storeId, authHeaders, loggedInUser]);
+
+  // ===== Cart Functions =====
   const updateOrderTab = useCallback(
     (updater: (tab: OrderTab) => void, key = activeTab) => {
       setOrders((prev) =>
@@ -479,16 +1087,23 @@ const OrderPOSHomeScreen: React.FC = () => {
     });
 
     setPhoneInput("");
-    setTempPhone("");
     setFoundCustomers([]);
     setShowCustomerDropdown(false);
-
     setSearchProduct("");
     setSearchedProducts([]);
     setShowProductDropdown(false);
-  }, [updateOrderTab, currentUserEmployee]);
 
-  const addNewOrderTab = () => {
+    // Clear saved cart
+    (async () => {
+      try {
+        await AsyncStorage.removeItem(CART_STORAGE_KEY);
+      } catch (err) {
+        console.error("Lỗi xóa cart:", err);
+      }
+    })();
+  }, [updateOrderTab, currentUserEmployee, storeId, loggedInUser]);
+
+  const addNewOrderTab = useCallback(() => {
     const maxKey = orders.reduce(
       (m, t) => Math.max(m, parseInt(t.key, 10) || 0),
       0
@@ -497,162 +1112,39 @@ const OrderPOSHomeScreen: React.FC = () => {
     const defaultEmployeeId = currentUserEmployee?.isOwner
       ? null
       : currentUserEmployee?._id || null;
+
     setOrders((prev) => [...prev, makeEmptyTab(newKey, defaultEmployeeId)]);
     setActiveTab(newKey);
-  };
+  }, [orders, currentUserEmployee]);
 
-  const removeOrderTab = (key: string) => {
-    if (orders.length <= 1) return;
+  const removeOrderTab = useCallback(
+    (key: string) => {
+      if (orders.length <= 1) return;
 
-    setOrders((prev) => {
-      const next = prev.filter((t) => t.key !== key);
-      const nextActive = activeTab === key ? next[0]?.key : activeTab;
-      if (nextActive) setActiveTab(nextActive);
-      return next;
-    });
-  };
-
-  // ===== init load AsyncStorage =====
-  useEffect(() => {
-    (async () => {
-      try {
-        const [csRaw, tkn, usrRaw] = await Promise.all([
-          AsyncStorage.getItem("currentStore"),
-          AsyncStorage.getItem("token"),
-          AsyncStorage.getItem("user"),
-        ]);
-
-        const cs = safeParse(csRaw);
-        const usr = safeParse(usrRaw);
-
-        if (!cs?._id) {
-          Alert.alert(
-            "Thiếu cửa hàng",
-            "Không tìm thấy currentStore trong bộ nhớ."
-          );
-          setLoadingInit(false);
-          return;
-        }
-
-        setStoreId(cs._id);
-        setStoreName(cs?.name || "Cửa hàng");
-        setToken(tkn);
-        setLoggedInUser(usr);
-      } catch {
-        Alert.alert("Lỗi", "Không đọc được dữ liệu khởi tạo.");
-      } finally {
-        setLoadingInit(false);
-      }
-    })();
-  }, []);
-
-  // ===== load employees + loyalty =====
-  const loadEmployees = useCallback(async () => {
-    if (!storeId) return;
-
-    try {
-      const user = loggedInUser;
-      if (!user?.id && !user?._id) return;
-
-      const userId = user?.id || user?._id;
-      const role = user?.role;
-
-      // STAFF: dùng user như employee
-      if (role === "STAFF") {
-        const staffEmployee: Seller = {
-          _id: userId,
-          fullName:
-            user?.fullname || user?.fullName || user?.username || "Nhân viên",
-          user_id: {
-            _id: userId,
-            username: user?.username || "staff",
-            role,
-            email: user?.email,
-            phone: user?.phone,
-            menu: user?.menu,
-          },
-        };
-
-        setCurrentUserEmployee(staffEmployee);
-        setEmployees([staffEmployee as Employee]);
-        setOrders((prev) => prev.map((t) => ({ ...t, employeeId: userId })));
-        return;
-      }
-
-      // MANAGER/OWNER: load list
-      const res: any = await apiClient.get(`/stores/${storeId}/employees`, {
-        params: { deleted: "false" },
-        headers: authHeaders,
+      setOrders((prev) => {
+        const next = prev.filter((t) => t.key !== key);
+        const nextActive = activeTab === key ? next[0]?.key : activeTab;
+        if (nextActive) setActiveTab(nextActive);
+        return next;
       });
-
-      const employeesList: Employee[] =
-        res?.data?.employees || res?.data?.data?.employees || [];
-      setEmployees(Array.isArray(employeesList) ? employeesList : []);
-
-      if (role === "MANAGER" || role === "OWNER") {
-        const virtualOwner: VirtualOwner = {
-          _id: "virtual-owner",
-          fullName:
-            user?.fullname ||
-            user?.fullName ||
-            user?.username ||
-            "Chủ cửa hàng",
-          isOwner: true,
-        };
-
-        setCurrentUserEmployee(virtualOwner);
-        setOrders((prev) => prev.map((t) => ({ ...t, employeeId: null })));
-      }
-    } catch {
-      Alert.alert("Lỗi", "Không tải được nhân viên.");
-    }
-  }, [storeId, loggedInUser, authHeaders]);
-
-  const loadLoyaltySetting = useCallback(async () => {
-    if (!storeId) return;
-
-    try {
-      const res: any = await apiClient.get(`/loyaltys/config/${storeId}`, {
-        headers: authHeaders,
-      });
-      if (res?.data?.isConfigured && res?.data?.config?.isActive) {
-        setLoyaltySetting(res.data.config);
-      } else {
-        setLoyaltySetting(null);
-      }
-    } catch {
-      setLoyaltySetting(null);
-    }
-  }, [storeId, authHeaders]);
-
-  useEffect(() => {
-    if (!storeId) return;
-    loadEmployees();
-    loadLoyaltySetting();
-  }, [storeId, loadEmployees, loadLoyaltySetting]);
-
-  // ===== product search =====
-  const [searchProduct, setSearchProduct] = useState("");
-  const [searchedProducts, setSearchedProducts] = useState<Product[]>([]);
-  const [showProductDropdown, setShowProductDropdown] = useState(false);
-  const [productSearchLoading, setProductSearchLoading] = useState(false);
-  const [productSearchError, setProductSearchError] = useState<string | null>(
-    null
+    },
+    [orders, activeTab]
   );
 
-  const suggestedProducts = useMemo(() => {
-    const q = searchProduct.trim();
-    if (!q) return searchedProducts.slice(0, 12);
+  const getAvailableStock = useCallback((product: Product) => {
+    if (!product.batches || product.batches.length === 0) {
+      return product.stock_quantity;
+    }
 
-    return [...searchedProducts]
-      .map((p) => ({
-        p,
-        score: Math.max(matchScore(p.name, q), matchScore(p.sku, q)),
-      }))
-      .sort((a, b) => b.score - a.score)
-      .map((x) => x.p)
-      .slice(0, 12);
-  }, [searchProduct, searchedProducts]);
+    const available = product.batches.reduce((sum: number, b: ProductBatch) => {
+      const isExpired = !!(
+        b.expiry_date && new Date(b.expiry_date) < new Date()
+      );
+      return isExpired ? sum : sum + (b.quantity || 0);
+    }, 0);
+
+    return available;
+  }, []);
 
   const searchProductDebounced = useMemo(
     () =>
@@ -676,6 +1168,7 @@ const OrderPOSHomeScreen: React.FC = () => {
             params: { query: q, storeId: sid },
             headers,
           });
+
           const list = res?.data?.products || [];
           setSearchedProducts(Array.isArray(list) ? list : []);
         } catch (e: any) {
@@ -686,7 +1179,7 @@ const OrderPOSHomeScreen: React.FC = () => {
         } finally {
           setProductSearchLoading(false);
         }
-      }, 220),
+      }, 300),
     []
   );
 
@@ -694,30 +1187,91 @@ const OrderPOSHomeScreen: React.FC = () => {
     searchProductDebounced(searchProduct);
   }, [searchProduct, searchProductDebounced]);
 
-  // chặn blur khi đang bấm vào dropdown
-  const selectingCustomerRef = useRef(false);
-  const selectingProductRef = useRef(false);
-
   const addToCart = useCallback(
     (product: Product) => {
+      const availableStock = getAvailableStock(product);
+
+      if (availableStock <= 0) {
+        const hasExpired =
+          product.batches &&
+          product.batches.some(
+            (b) => b.expiry_date && new Date(b.expiry_date) < new Date()
+          );
+
+        Alert.alert(
+          hasExpired ? "Hàng hết hạn" : "Hết hàng",
+          hasExpired
+            ? `Sản phẩm "${product.name}" chỉ còn lô đã hết hạn.`
+            : `Sản phẩm "${product.name}" đã hết hàng.`
+        );
+        return;
+      }
+
+      // Select best batch (FEFO)
+      let selectedBatchId: string | null = null;
+      let selectedBatchName: string | null = null;
+      let selectedBatchExpiry: string | null = null;
+
+      if (product.batches && product.batches.length > 0) {
+        const now = new Date();
+        const validBatches = product.batches.filter((b) => {
+          const isExpired = b.expiry_date && new Date(b.expiry_date) < now;
+          return (b.quantity || 0) > 0 && !isExpired;
+        });
+
+        if (validBatches.length > 0) {
+          // Sort by expiry date (nearest first)
+          validBatches.sort((a, b) => {
+            if (a.expiry_date && b.expiry_date) {
+              return (
+                new Date(a.expiry_date).getTime() -
+                new Date(b.expiry_date).getTime()
+              );
+            }
+            if (a.expiry_date) return -1;
+            if (b.expiry_date) return 1;
+            return 0;
+          });
+
+          const bestBatch = validBatches[0];
+          selectedBatchId = bestBatch.batch_no;
+          selectedBatchName = bestBatch.batch_no;
+          selectedBatchExpiry = bestBatch.expiry_date;
+        }
+      }
+
       const priceNum = getPriceNumber(product.price);
 
       updateOrderTab((tab) => {
-        const existing = tab.cart.find(
-          (item) => item.productId === product._id
-        );
+        let existingIndex = -1;
 
-        if (existing) {
-          const newQty = existing.quantity + 1;
-          tab.cart = tab.cart.map((item) =>
-            item.productId === product._id
-              ? {
-                  ...item,
-                  quantity: newQty,
-                  subtotal: (newQty * getItemUnitPrice(item)).toFixed(2),
-                }
-              : item
+        if (selectedBatchId) {
+          existingIndex = tab.cart.findIndex(
+            (item) =>
+              item.productId === product._id && item.batchId === selectedBatchId
           );
+        } else {
+          existingIndex = tab.cart.findIndex(
+            (item) => item.productId === product._id && !item.batchId
+          );
+        }
+
+        if (existingIndex !== -1) {
+          const existing = tab.cart[existingIndex];
+          const newQty = existing.quantity + 1;
+
+          if (newQty > availableStock) {
+            Alert.alert("Vượt tồn kho", `Chỉ còn ${availableStock} sản phẩm.`);
+            return;
+          }
+
+          const newCart = [...tab.cart];
+          newCart[existingIndex] = {
+            ...existing,
+            quantity: newQty,
+            subtotal: (newQty * getItemUnitPrice(existing)).toFixed(2),
+          };
+          tab.cart = newCart;
         } else {
           tab.cart = [
             ...tab.cart,
@@ -729,61 +1283,92 @@ const OrderPOSHomeScreen: React.FC = () => {
               price: product.price,
               cost_price: product.cost_price,
               unit: product.unit,
+              tax_rate: product.tax_rate,
               quantity: 1,
               overridePrice: null,
               saleType: "NORMAL",
               subtotal: priceNum.toFixed(2),
+              stock_quantity: availableStock,
+              batchId: selectedBatchId,
+              batchCode: selectedBatchName,
+              expiryDate: selectedBatchExpiry,
             },
           ];
         }
       });
 
-      // reset search UI
       setSearchProduct("");
       setSearchedProducts([]);
       setShowProductDropdown(false);
       Keyboard.dismiss();
     },
+    [updateOrderTab, getAvailableStock]
+  );
+
+  const updateQuantity = useCallback(
+    (id: string, batchId: string | null | undefined, qty: number) => {
+      updateOrderTab((tab) => {
+        const isMatch = (i: CartItem) =>
+          i.productId === id &&
+          ((!batchId && !i.batchId) || (batchId && i.batchId === batchId));
+
+        const item = tab.cart.find(isMatch);
+        if (!item) return;
+
+        if (qty <= 0) {
+          tab.cart = tab.cart.filter((i) => !isMatch(i));
+        } else {
+          const maxStock =
+            item.stock_quantity ??
+            searchedProducts.find((p) => p._id === id)?.stock_quantity ??
+            9999;
+
+          if (qty > maxStock) {
+            Alert.alert(
+              "Vượt tồn kho",
+              `"${item.name}" chỉ còn ${maxStock} sản phẩm.`
+            );
+            const cappedQty = maxStock;
+            tab.cart = tab.cart.map((i) =>
+              isMatch(i)
+                ? {
+                    ...i,
+                    quantity: cappedQty,
+                    subtotal: (getItemUnitPrice(i) * cappedQty).toFixed(2),
+                  }
+                : i
+            );
+            return;
+          }
+
+          tab.cart = tab.cart.map((i) =>
+            isMatch(i)
+              ? {
+                  ...i,
+                  quantity: qty,
+                  subtotal: (getItemUnitPrice(i) * qty).toFixed(2),
+                }
+              : i
+          );
+        }
+      });
+    },
+    [updateOrderTab, searchedProducts]
+  );
+
+  const removeItem = useCallback(
+    (productId: string, batchId: string | null | undefined) => {
+      updateOrderTab((tab) => {
+        const isMatch = (i: CartItem) =>
+          i.productId === productId &&
+          ((!batchId && !i.batchId) || (batchId && i.batchId === batchId));
+        tab.cart = tab.cart.filter((i) => !isMatch(i));
+      });
+    },
     [updateOrderTab]
   );
 
-  const updateQuantity = (id: string, qty: number) => {
-    updateOrderTab((tab) => {
-      const item = tab.cart.find((i) => i.productId === id);
-      if (!item) return;
-
-      if (qty <= 0) {
-        tab.cart = tab.cart.filter((i) => i.productId !== id);
-      } else {
-        tab.cart = tab.cart.map((i) =>
-          i.productId === id
-            ? {
-                ...i,
-                quantity: qty,
-                subtotal: (getItemUnitPrice(i) * qty).toFixed(2),
-              }
-            : i
-        );
-      }
-    });
-  };
-
-  const removeItem = (productId: string) => {
-    updateOrderTab((tab) => {
-      tab.cart = tab.cart.filter((i) => i.productId !== productId);
-    });
-  };
-
-  // ===== customer search + add =====
-  const [phoneInput, setPhoneInput] = useState("");
-  const [tempPhone, setTempPhone] = useState("");
-  const [foundCustomers, setFoundCustomers] = useState<Customer[]>([]);
-  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
-
-  const [newCustomerModalOpen, setNewCustomerModalOpen] = useState(false);
-  const [newCustomerName, setNewCustomerName] = useState("");
-  const [newCustomerPhone, setNewCustomerPhone] = useState("");
-
+  // ===== Customer Functions =====
   const searchCustomerDebounced = useMemo(
     () =>
       debounce(async (phone: string) => {
@@ -791,8 +1376,6 @@ const OrderPOSHomeScreen: React.FC = () => {
         const headers = authHeadersRef.current;
 
         const p = phone.trim();
-        setTempPhone(p);
-
         if (!sid || p.length < 3) {
           setFoundCustomers([]);
           return;
@@ -803,122 +1386,111 @@ const OrderPOSHomeScreen: React.FC = () => {
             params: { query: p, storeId: sid },
             headers,
           });
+
           const list = res?.data?.customers || [];
           setFoundCustomers(Array.isArray(list) ? list : []);
         } catch {
           setFoundCustomers([]);
           setNewCustomerName("");
           setNewCustomerPhone(p);
-          setNewCustomerModalOpen(true);
+          setNewCustomerModal(true);
         }
       }, 300),
     []
   );
 
-  const onChangePhoneInput = (val: string) => {
-    setPhoneInput(val);
+  const onChangePhoneInput = useCallback(
+    (val: string) => {
+      setPhoneInput(val);
 
-    if (!val.trim()) {
-      setFoundCustomers([]);
+      if (!val.trim()) {
+        setFoundCustomers([]);
+        updateOrderTab((t) => {
+          t.customer = null;
+          t.usedPoints = 0;
+          t.usedPointsEnabled = false;
+        });
+        return;
+      }
+
+      setShowCustomerDropdown(true);
+      searchCustomerDebounced(val);
+    },
+    [updateOrderTab, searchCustomerDebounced]
+  );
+
+  const selectCustomer = useCallback(
+    (c: Customer) => {
       updateOrderTab((t) => {
-        t.customer = null;
+        t.customer = c;
         t.usedPoints = 0;
         t.usedPointsEnabled = false;
       });
-      return;
-    }
 
-    setShowCustomerDropdown(true);
-    searchCustomerDebounced(val);
-  };
+      setPhoneInput(c.phone);
+      setFoundCustomers([]);
+      setShowCustomerDropdown(false);
+    },
+    [updateOrderTab]
+  );
 
-  const selectCustomer = (c: Customer) => {
-    updateOrderTab((t) => {
-      t.customer = c;
-      t.usedPoints = 0;
-      t.usedPointsEnabled = false;
-    });
-
-    setPhoneInput(c.phone);
-    setFoundCustomers([]);
-    setShowCustomerDropdown(false);
-  };
-
-  const createCustomer = async () => {
+  const createCustomer = useCallback(async () => {
     if (!storeId) return;
 
     const name = newCustomerName.trim();
     const phone = newCustomerPhone.trim();
 
     if (!name || !phone) {
-      Alert.alert("Thiếu thông tin", "Vui lòng nhập tên và số điện thoại.");
+      Alert.alert("Thiếu thông tin", "Vui lòng nhập tên và số điện thoại");
       return;
     }
 
     try {
       const res: any = await apiClient.post(
         `/customers`,
-        { storeId, name, phone },
+        { storeId, name, phone, email: newCustomerEmail || undefined },
         { headers: authHeaders }
       );
 
       const created: Customer =
         res?.data?.customer || res?.data?.data?.customer || res?.data;
-      if (!created?._id) throw new Error("create customer failed");
+      if (!created?._id) throw new Error("Tạo khách hàng thất bại");
 
       selectCustomer(created);
-      setNewCustomerModalOpen(false);
+      setNewCustomerModal(false);
+      setNewCustomerName("");
+      setNewCustomerPhone("");
+      setNewCustomerEmail("");
+
+      Alert.alert("Thành công", "Đã tạo khách hàng mới");
     } catch (e: any) {
       Alert.alert(
         "Lỗi",
-        e?.response?.data?.message || "Không tạo được khách hàng."
+        e?.response?.data?.message || "Không thể tạo khách hàng"
       );
     }
-  };
-
-  // ===== totals/payment =====
-  const subtotal = useMemo(
-    () =>
-      currentTab.cart.reduce(
-        (sum, item) => sum + getItemUnitPrice(item) * item.quantity,
-        0
-      ),
-    [currentTab.cart]
-  );
-
-  const discount = useMemo(() => {
-    const vndPerPoint = loyaltySetting?.vndPerPoint || 0;
-    return currentTab.usedPointsEnabled
-      ? (currentTab.usedPoints || 0) * vndPerPoint
-      : 0;
   }, [
-    currentTab.usedPointsEnabled,
-    currentTab.usedPoints,
-    loyaltySetting?.vndPerPoint,
+    storeId,
+    newCustomerName,
+    newCustomerPhone,
+    newCustomerEmail,
+    authHeaders,
+    selectCustomer,
   ]);
 
-  const beforeTax = Math.max(subtotal - discount, 0);
-  const vatAmount = currentTab.isVAT ? beforeTax * 0.1 : 0;
-  const totalAmount = beforeTax + vatAmount;
-
-  const changeAmount = useMemo(
-    () => (currentTab.cashReceived || 0) - totalAmount,
-    [currentTab.cashReceived, totalAmount]
-  );
-
-  // ===== create order =====
-  const createOrder = async () => {
+  // ===== Order Functions =====
+  const createOrder = useCallback(async () => {
     if (!storeId) return;
 
     if (currentTab.cart.length === 0) {
-      Alert.alert("Đơn trống", "Hãy thêm sản phẩm vào giỏ.");
+      Alert.alert("Giỏ hàng trống", "Vui lòng thêm sản phẩm vào giỏ");
       return;
     }
 
     const sendEmployeeId =
       currentTab.employeeId === "virtual-owner" ? null : currentTab.employeeId;
-
     setLoading(true);
+
     try {
       const items = currentTab.cart.map((item) => ({
         productId: item.productId,
@@ -935,12 +1507,26 @@ const OrderPOSHomeScreen: React.FC = () => {
         items,
         paymentMethod: currentTab.paymentMethod,
         isVATInvoice: currentTab.isVAT,
+        orderId: currentTab.pendingOrderId || undefined,
+        vatAmount,
+        discountAmount: discount,
+        beforeTaxAmount: beforeTax,
+        totalAmount,
+        grossAmount: subtotal + vatAmount,
       };
 
       if (currentTab.customer) {
         payload.customerInfo = {
           phone: currentTab.customer.phone,
           name: currentTab.customer.name,
+        };
+      }
+
+      if (currentTab.isVAT) {
+        payload.vatInfo = {
+          companyName: currentTab.companyName,
+          taxCode: currentTab.taxCode,
+          companyAddress: currentTab.companyAddress,
         };
       }
 
@@ -956,18 +1542,35 @@ const OrderPOSHomeScreen: React.FC = () => {
       const orderId = order?._id;
       if (!orderId) throw new Error("Không lấy được orderId");
 
+      // [FEEDBACK] Show notification immediately
+      try {
+        const msg = `Đơn #${order?.orderCode || order?._id?.slice(-6) || "..."} - ${formatPrice(totalAmount)}`;
+        // notificationService.showToast removed as requested
+        notificationService.scheduleLocalNotification(
+          {
+            type: "order",
+            title: "Đơn hàng mới",
+            message: msg,
+            data: { orderId: order?._id },
+          },
+          null
+        );
+      } catch (e) {
+        console.warn("Notification trigger failed", e);
+      }
+
       updateOrderTab((tab) => {
         tab.pendingOrderId = orderId;
         tab.orderCreatedAt = order?.createdAt || "";
         tab.orderPrintCount =
           typeof order?.printCount === "number" ? order.printCount : 0;
-        tab.orderEarnedPoints = (order as any)?.earnedPoints ?? 0;
+        tab.orderEarnedPoints = order?.earnedPoints ?? 0;
         tab.orderCreatedPaymentMethod = currentTab.paymentMethod;
 
         if (currentTab.paymentMethod === "qr" && res?.data?.qrDataURL) {
           tab.qrImageUrl = res.data.qrDataURL;
           tab.savedQrImageUrl = res.data.qrDataURL;
-
+          tab.qrPayload = (order as any)?.paymentRef;
           tab.qrExpiryTs = order?.qrExpiry
             ? new Date(order.qrExpiry).getTime()
             : null;
@@ -978,24 +1581,46 @@ const OrderPOSHomeScreen: React.FC = () => {
       });
 
       if (currentTab.paymentMethod === "cash") {
-        Alert.alert("Thành công", "Đã tạo đơn hàng (tiền mặt).");
+        // Tiền mặt: Chỉ thông báo đơn hàng đã tạo, mở modal để xác nhận thanh toán/in
+        // Alert.alert("Thành công", "Đã tạo đơn hàng chờ thanh toán.", [
+        //   {
+        //     text: "OK",
+        //     // onPress: () => setBillModal(true),
+        //   },
+        // ]);
       } else {
-        setQrModalOpen(true);
+        setQrModal(true);
       }
     } catch (err: any) {
-      Alert.alert(
-        "Lỗi tạo đơn",
-        err?.response?.data?.message || err?.message || "Không thể tạo đơn."
-      );
+      const errorMessage =
+        err?.response?.data?.message || err?.message || "Lỗi tạo đơn";
+
+      if (currentTab.paymentMethod === "qr" && errorMessage.includes("PayOS")) {
+        Alert.alert(
+          "Chưa tích hợp thanh toán",
+          "Vui lòng cấu hình PayOS trong phần cài đặt thanh toán"
+        );
+      } else {
+        Alert.alert("Lỗi", errorMessage);
+      }
     } finally {
       setLoading(false);
     }
-  };
+  }, [
+    storeId,
+    currentTab,
+    authHeaders,
+    vatAmount,
+    discount,
+    beforeTax,
+    totalAmount,
+    subtotal,
+    updateOrderTab,
+  ]);
 
-  // ===== confirm paid cash =====
-  const confirmPaidCash = async () => {
+  const confirmPaidCash = useCallback(async () => {
     if (!currentTab.pendingOrderId) {
-      Alert.alert("Thiếu đơn", "Chưa có orderId.");
+      Alert.alert("Lỗi", "Không tìm thấy đơn hàng");
       return;
     }
 
@@ -1005,285 +1630,220 @@ const OrderPOSHomeScreen: React.FC = () => {
         {},
         { headers: authHeaders }
       );
-      setBillModalOpen(true);
+
+      // [FEEDBACK] Payment success notification
+      try {
+        const msg = `Đơn hàng đã thanh toán thành công`;
+        // notificationService.showToast removed as requested
+        notificationService.scheduleLocalNotification(
+          {
+            type: "payment",
+            title: "Thanh toán thành công",
+            message: msg,
+          },
+          null
+        );
+      } catch (e) {
+        console.warn("Notification trigger failed", e);
+      }
+
+      Alert.alert(
+        "Thành công",
+        "Đã xác nhận thanh toán. Bạn có muốn in hóa đơn không?",
+        [
+          {
+            text: "Không",
+            style: "cancel",
+            onPress: () => {
+              setBillModal(false);
+              setQrModal(false);
+              resetCurrentTab();
+            },
+          },
+          {
+            text: "In hóa đơn",
+            onPress: () => {
+              triggerPrint(currentTab.pendingOrderId!, true);
+            },
+          },
+        ]
+      );
     } catch (e: any) {
       Alert.alert(
         "Lỗi",
-        e?.response?.data?.message || "Lỗi xác nhận thanh toán tiền mặt."
+        e?.response?.data?.message || "Lỗi xác nhận thanh toán"
       );
     }
-  };
+  }, [currentTab.pendingOrderId, authHeaders]);
 
-  // ===== print bill (server side) =====
-  const triggerPrintServer = async (orderId: string) => {
-    try {
-      await apiClient.post(
-        `/orders/${orderId}/print-bill`,
-        {},
-        { headers: authHeaders }
-      );
-      Alert.alert("Thành công", "Đã gửi lệnh in hoá đơn.");
+  const triggerPrint = useCallback(
+    async (orderIdInput: string, shouldReset: boolean = false) => {
+      if (isPrinting) return;
 
-      // reset sau khi in xong (giống logic web)
-      setBillModalOpen(false);
-      setQrModalOpen(false);
-      resetCurrentTab();
-    } catch (err: any) {
-      Alert.alert(
-        "Lỗi",
-        err?.response?.data?.message || "In hoá đơn không thành công!"
-      );
-    }
-  };
+      setIsPrinting(true);
 
-  // ===== Export PDF to file =====
-  const buildInvoiceHtml = useCallback(() => {
-    const rows = currentTab.cart
-      .map((i, idx) => {
-        const unit = getItemUnitPrice(i);
-        const amount = unit * i.quantity;
+      try {
+        // 1. Lấy thông tin chi tiết đơn hàng để in
+        // Nếu là pending order hiện tại, dùng luôn dữ liệu hiện tại
+        // Nhưng tốt nhất nên gọi API lấy dữ liệu chuẩn từ server để đảm bảo chính xác (số lần in, ngày tạo, v.v.)
 
-        return `
-          <tr>
-            <td style="padding:6px 0; border-bottom: 1px solid #eee;">
-              ${idx + 1}. ${i.name}<br/>
-              <span style="color:#666;font-size:11px;">
-                SKU: ${i.sku} • ${i.unit || ""}
-              </span>
-            </td>
-            <td style="padding:6px 0; border-bottom: 1px solid #eee; text-align:right;">${
-              i.quantity
-            }</td>
-            <td style="padding:6px 0; border-bottom: 1px solid #eee; text-align:right;">${formatPrice(
-              unit
-            )}</td>
-            <td style="padding:6px 0; border-bottom: 1px solid #eee; text-align:right; font-weight:700;">${formatPrice(
-              amount
-            )}</td>
-          </tr>
-        `;
-      })
-      .join("");
+        let printData: any = null;
 
-    const orderId = currentTab.pendingOrderId || "";
-    const customerLine = currentTab.customer
-      ? `${currentTab.customer.name} (${currentTab.customer.phone})`
-      : "Khách vãng lai";
+        // Check if we can use currentTab data if it matches
+        if (currentTab.pendingOrderId === orderIdInput) {
+          // Prepare local data
+          printData = {
+            storeName: storeName || "Cửa hàng",
+            storeAddress: storeInfo?.address || "",
+            storePhone: storeInfo?.phone || "",
+            storeTaxCode: storeInfo?.taxCode || "",
 
-    return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <style>
-    body { font-family: Arial, Helvetica, sans-serif; font-size: 12px; padding: 14px; }
-    .muted { color:#666; }
-    h2 { margin: 0 0 6px 0; }
-    .box { border: 1px solid #eaeaea; border-radius: 10px; padding: 10px; }
-    table { width:100%; border-collapse: collapse; margin-top: 10px; }
-    th { text-align:left; font-size: 11px; color:#666; padding-bottom: 6px; border-bottom:1px solid #eee; }
-    .right { text-align:right; }
-    .total { font-size: 16px; font-weight: 800; color: #1d4ed8; }
-  </style>
-</head>
-<body>
-  <h2>${storeName}</h2>
-  <div class="muted">POS • Hoá đơn</div>
-  <div style="height:10px"></div>
+            orderId: orderIdInput || "",
+            createdAt: currentTab.orderCreatedAt || new Date(),
+            employeeName: employeeLabel || "Nhân viên",
 
-  <div class="box">
-    <div><b>Mã đơn:</b> ${orderId}</div>
-    <div><b>Khách:</b> ${customerLine}</div>
-    <div><b>Thanh toán:</b> ${currentTab.paymentMethod === "cash" ? "Tiền mặt" : "QR"}</div>
-    <div><b>VAT:</b> ${currentTab.isVAT ? "Có" : "Không"}</div>
-  </div>
+            customerName: currentTab.customer?.name || "Khách vãng lai",
+            customerPhone: currentTab.customer?.phone || "",
+            companyName: currentTab.companyName || "",
+            taxCode: currentTab.taxCode || "",
+            companyAddress: currentTab.companyAddress || "",
 
-  <table>
-    <thead>
-      <tr>
-        <th>Sản phẩm</th>
-        <th class="right">SL</th>
-        <th class="right">Đơn giá</th>
-        <th class="right">Thành tiền</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${rows}
-    </tbody>
-  </table>
+            paymentMethod: currentTab.paymentMethod || "cash",
+            isVAT: !!currentTab.isVAT,
+            printCount: currentTab.orderPrintCount || 0,
 
-  <div style="height:8px"></div>
-  <div class="right muted">Tạm tính: ${formatPrice(subtotal)}</div>
-  <div class="right muted">Giảm (điểm): -${formatPrice(discount)}</div>
-  <div class="right muted">VAT: ${formatPrice(vatAmount)}</div>
-  <div class="right total">Tổng: ${formatPrice(totalAmount)}</div>
-</body>
-</html>`;
-  }, [
-    currentTab.cart,
-    currentTab.pendingOrderId,
-    currentTab.customer,
-    currentTab.paymentMethod,
-    currentTab.isVAT,
-    storeName,
-    subtotal,
-    discount,
-    vatAmount,
-    totalAmount,
-  ]);
+            items: (currentTab.cart || []).map((item) => ({
+              name: item.name || "Sản phẩm",
+              unit: item.unit || "",
+              quantity: item.quantity || 0,
+              price: getItemUnitPrice(item) || 0,
+              subtotal: parseFloat(item.subtotal || "0") || 0,
+            })),
 
-  const exportBillPdfToDevice = useCallback(async () => {
-    const html = buildInvoiceHtml();
-    const fileName = `hoa-don-${currentTab.pendingOrderId || "tmp"}.pdf`;
+            subtotal: subtotal || 0,
+            discount: discount || 0,
+            vatAmount: vatAmount || 0,
+            totalAmount: totalAmount || 0,
+          };
+        } else {
+          // Fetch order details if local data is not available or doesn't match
+          try {
+            const res: any = await apiClient.get(`/orders/${orderIdInput}`, {
+              headers: authHeaders,
+            });
+            const order = res?.data?.order;
 
-    // 1) Try Expo (expo-print + expo-sharing)
-    try {
-      const Print = require("expo-print");
-      const Sharing = require("expo-sharing");
+            if (order) {
+              printData = {
+                storeName: storeName || "Cửa hàng",
+                storeAddress: storeInfo?.address || "",
+                storePhone: storeInfo?.phone || "",
+                storeTaxCode: storeInfo?.taxCode || "",
 
-      if (Print?.printToFileAsync) {
-        const { uri } = await Print.printToFileAsync({ html });
-        if (Sharing?.isAvailableAsync && (await Sharing.isAvailableAsync())) {
-          await Sharing.shareAsync(uri, {
-            mimeType: "application/pdf",
-            dialogTitle: fileName,
-          });
-          return;
+                orderId: order._id || orderIdInput || "",
+                createdAt: order.createdAt || new Date(),
+                employeeName: employeeLabel || "Nhân viên",
+
+                customerName: order.customerInfo?.name || "Khách vãng lai",
+                customerPhone: order.customerInfo?.phone || "",
+                companyName: order.vatInfo?.companyName || "",
+                taxCode: order.vatInfo?.taxCode || "",
+                companyAddress: order.vatInfo?.companyAddress || "",
+
+                paymentMethod: order.paymentMethod || "cash",
+                isVAT: !!order.isVATInvoice,
+                printCount: order.printCount || 0,
+
+                items: (order.items || []).map((item: any) => ({
+                  name: item.name || item.product?.name || "Sản phẩm",
+                  unit: item.unit || item.product?.unit || "",
+                  quantity: item.quantity || 0,
+                  price: item.price || 0,
+                  subtotal: (item.quantity || 0) * (item.price || 0),
+                })),
+
+                subtotal: order.subTotal || order.totalAmount || 0,
+                discount: order.discountAmount || 0,
+                vatAmount: order.vatAmount || 0,
+                totalAmount: order.totalAmount || 0,
+              };
+            }
+          } catch (fetchErr) {
+            console.error("Lỗi lấy thông tin đơn hàng để in:", fetchErr);
+            // throw fetchErr; // Let the main catch handle it, or handle specific error here
+            Alert.alert(
+              "Lỗi",
+              "Không thể lấy thông tin chi tiết đơn hàng để in."
+            );
+            return;
+          }
         }
 
-        await Share.share({
-          url: uri,
-          message: "Hoá đơn PDF",
-          title: fileName,
-        });
-        return;
-      }
-    } catch {
-      // ignore
-    }
+        if (printData) {
+          await printBill(printData);
 
-    // 2) Try react-native-html-to-pdf
-    try {
-      const RNHTMLtoPDF = require("react-native-html-to-pdf");
-      if (RNHTMLtoPDF?.convert) {
-        const results = await RNHTMLtoPDF.convert({
-          html,
-          fileName: `hoa-don-${currentTab.pendingOrderId || "tmp"}`,
-          base64: false,
-        });
-        const filePath = results?.filePath;
-        if (filePath) {
-          await Share.share({
-            url: filePath,
-            message: "Hoá đơn PDF",
-            title: fileName,
-          });
-          return;
+          // Gọi API để server biết đã in (tăng printCount)
+          await apiClient.post(
+            `/orders/${orderIdInput}/print-bill`,
+            {},
+            { headers: authHeaders }
+          );
+
+          // Update print count locally if needed
+          updateOrderTab(
+            (t) => (t.orderPrintCount = (t.orderPrintCount || 0) + 1)
+          );
+
+          if (shouldReset) {
+            resetCurrentTab();
+          }
         }
+      } catch (err: any) {
+        Alert.alert("Lỗi", err?.response?.data?.message || "Lỗi in hóa đơn");
+      } finally {
+        setIsPrinting(false);
       }
-    } catch {
-      // ignore
-    }
+    },
+    [
+      authHeaders,
+      isPrinting,
+      currentTab,
+      storeName,
+      storeInfo,
+      employeeLabel,
+      subtotal,
+      discount,
+      vatAmount,
+      totalAmount,
+      vatAmount,
+      totalAmount,
+      updateOrderTab,
+      resetCurrentTab,
+    ]
+  );
 
-    Alert.alert(
-      "Chưa hỗ trợ xuất PDF",
-      "Thiếu thư viện tạo PDF. Nếu dùng Expo: cài expo-print + expo-sharing. Nếu RN CLI: cài react-native-html-to-pdf."
-    );
-  }, [buildInvoiceHtml, currentTab.pendingOrderId]);
+  // ===== UI Helpers =====
+  const openPriceModal = useCallback(
+    (record: CartItem) => {
+      const realItem =
+        currentTab.cart.find(
+          (i) =>
+            i.productId === record.productId &&
+            ((record.batchId && i.batchId === record.batchId) ||
+              (!record.batchId && !i.batchId))
+        ) || record;
 
-  // ===== UI: employee modal =====
-  const [employeeModalOpen, setEmployeeModalOpen] = useState(false);
+      setPriceEditModal({
+        visible: true,
+        item: realItem,
+        tempSaleType: realItem.saleType || "NORMAL",
+        tempOverridePrice: realItem.overridePrice ?? null,
+      });
+    },
+    [currentTab.cart]
+  );
 
-  const employeeLabel = useMemo(() => {
-    if (currentUserEmployee?.isOwner && currentTab.employeeId === null) {
-      return `${currentUserEmployee.fullName} (Chủ cửa hàng)`;
-    }
-    const e = employees.find((x) => x._id === currentTab.employeeId);
-    return e?.fullName || "Chưa chọn";
-  }, [currentUserEmployee, currentTab.employeeId, employees]);
-
-  // ===== UI: QR modal =====
-  const [qrModalOpen, setQrModalOpen] = useState(false);
-
-  // countdown QR
-  const [qrRemainingSec, setQrRemainingSec] = useState<number | null>(null);
-  useEffect(() => {
-    if (!qrModalOpen) return;
-
-    const expiry = currentTab.qrExpiryTs;
-    if (!expiry) {
-      setQrRemainingSec(null);
-      return;
-    }
-
-    const tick = () => {
-      const diff = Math.max(0, Math.floor((expiry - Date.now()) / 1000));
-      setQrRemainingSec(diff);
-
-      if (diff <= 0) {
-        updateOrderTab((t) => {
-          t.qrImageUrl = null;
-          t.qrPayload = null;
-          t.qrExpiryTs = null;
-        });
-        Alert.alert("Hết hạn", "QR đã hết hạn. Vui lòng tạo QR mới.");
-      }
-    };
-
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [qrModalOpen, currentTab.qrExpiryTs, updateOrderTab]);
-
-  const closeQrModal = () => {
-    setQrModalOpen(false);
-    updateOrderTab((tab) => {
-      tab.qrImageUrl = null;
-      tab.qrPayload = null;
-      tab.qrExpiryTs = null;
-    });
-  };
-
-  // ===== UI: bill modal =====
-  const [billModalOpen, setBillModalOpen] = useState(false);
-
-  // ===== UI: price edit modal =====
-  const [priceEditModal, setPriceEditModal] = useState<{
-    visible: boolean;
-    item?: CartItem;
-    tempSaleType?: SaleType;
-    tempOverridePrice?: number | null;
-  }>({ visible: false });
-
-  const openPriceModal = (record: CartItem) => {
-    const realItem =
-      currentTab.cart.find((i) => i.productId === record.productId) || record;
-    setPriceEditModal({
-      visible: true,
-      item: realItem,
-      tempSaleType: realItem.saleType || "NORMAL",
-      tempOverridePrice: realItem.overridePrice ?? null,
-    });
-  };
-
-  const computeTempUnitPrice = () => {
-    const item = priceEditModal.item;
-    if (!item) return 0;
-
-    const st = priceEditModal.tempSaleType || "NORMAL";
-    if (st === "FREE") return 0;
-    if (st === "AT_COST") return getPriceNumber(item.cost_price || item.price);
-
-    if (
-      priceEditModal.tempOverridePrice !== null &&
-      priceEditModal.tempOverridePrice !== undefined
-    ) {
-      return Number(priceEditModal.tempOverridePrice) || 0;
-    }
-    return getPriceNumber(item.price);
-  };
-
-  const applyPriceEdit = () => {
+  const applyPriceEdit = useCallback(() => {
     if (!priceEditModal.item || !priceEditModal.tempSaleType) return;
 
     const item = priceEditModal.item;
@@ -1302,278 +1862,369 @@ const OrderPOSHomeScreen: React.FC = () => {
     const newSubtotal = (finalUnit * item.quantity).toFixed(2);
 
     updateOrderTab((tab) => {
-      tab.cart = tab.cart.map((i) =>
-        i.productId === item.productId
+      tab.cart = tab.cart.map((i) => {
+        const isMatch =
+          i.productId === item.productId &&
+          ((item.batchId && i.batchId === item.batchId) ||
+            (!item.batchId && !i.batchId));
+        return isMatch
           ? {
               ...i,
               saleType: st,
               overridePrice: override,
               subtotal: newSubtotal,
             }
-          : i
-      );
+          : i;
+      });
     });
 
     setPriceEditModal({ visible: false });
-  };
+  }, [priceEditModal, updateOrderTab]);
 
-  // ===== points block =====
-  const PointsBlock = useMemo(() => {
-    const canUse = !!loyaltySetting && !!currentTab.customer;
-    const maxPoints = currentTab.customer?.loyaltyPoints || 0;
-    const vndPerPoint = loyaltySetting?.vndPerPoint || 0;
+  const computeTempUnitPrice = useCallback(() => {
+    const item = priceEditModal.item;
+    if (!item) return 0;
 
-    if (!loyaltySetting) return null;
+    const st = priceEditModal.tempSaleType || "NORMAL";
+    if (st === "FREE") return 0;
+    if (st === "AT_COST") return getPriceNumber(item.cost_price || item.price);
 
-    return (
-      <View style={{ marginTop: SPACING.md }}>
-        <View style={styles.rowBetween}>
-          <Text style={styles.mutedInline}>Dùng điểm</Text>
+    if (
+      priceEditModal.tempOverridePrice !== null &&
+      priceEditModal.tempOverridePrice !== undefined
+    ) {
+      return Number(priceEditModal.tempOverridePrice) || 0;
+    }
+    return getPriceNumber(item.price);
+  }, [priceEditModal]);
 
-          <Pressable
-            disabled={!canUse}
-            onPress={() =>
-              updateOrderTab((t) => {
-                t.usedPointsEnabled = !t.usedPointsEnabled;
-                if (!t.usedPointsEnabled) t.usedPoints = 0;
-              })
-            }
-            style={[
-              styles.toggle,
-              currentTab.usedPointsEnabled && canUse && styles.toggleOn,
-              !canUse && { opacity: 0.5 },
-            ]}
-          >
-            <Text
-              style={[
-                styles.toggleText,
-                currentTab.usedPointsEnabled && canUse && styles.toggleTextOn,
-              ]}
-            >
-              {currentTab.usedPointsEnabled ? "BẬT" : "TẮT"}
-            </Text>
-          </Pressable>
-        </View>
+  const handleNumpadPress = useCallback(
+    (val: string) => {
+      updateOrderTab((t) => {
+        let currentStr = String(t.cashReceived || 0);
+        if (currentStr === "0") currentStr = "";
 
-        <Text style={styles.hint}>
-          Khách hiện có: {maxPoints.toLocaleString("vi-VN")} điểm • Quy đổi:{" "}
-          {vndPerPoint.toLocaleString("vi-VN")}đ/điểm
-        </Text>
+        if (val === "C") {
+          t.cashReceived = 0;
+          return;
+        }
 
-        {currentTab.usedPointsEnabled ? (
-          <View style={{ marginTop: SPACING.sm }}>
-            <Text style={styles.mutedInline}>Số điểm muốn dùng</Text>
-            <TextInput
-              value={String(currentTab.usedPoints || 0)}
-              onChangeText={(txt) => {
-                const n = clampInt(txt, 0, maxPoints);
-                updateOrderTab((t) => {
-                  t.usedPoints = n;
-                });
-              }}
-              keyboardType="numeric"
-              style={styles.input}
-              editable={canUse}
-              placeholder="0"
-              placeholderTextColor={COLORS.placeholder}
-            />
-            <Text style={styles.hint}>
-              Giảm: {formatPrice((currentTab.usedPoints || 0) * vndPerPoint)}
-            </Text>
-          </View>
-        ) : null}
-      </View>
-    );
-  }, [
-    loyaltySetting,
-    currentTab.customer,
-    currentTab.usedPointsEnabled,
-    currentTab.usedPoints,
-    updateOrderTab,
-  ]);
+        if (val === "BACK") {
+          const newStr = currentStr.slice(0, -1);
+          t.cashReceived = newStr ? parseInt(newStr) : 0;
+          return;
+        }
 
-  const CartRow = useCallback(
-    ({ item }: { item: CartItem }) => {
-      const unitPrice = getItemUnitPrice(item);
-      const amount = unitPrice * item.quantity;
+        let nextStr = currentStr;
+        if (val === "000") {
+          if (currentStr.length === 0) return;
+          nextStr += "000";
+        } else {
+          nextStr += val;
+        }
 
-      const isCustom =
-        (item.saleType && item.saleType !== "NORMAL") ||
-        item.overridePrice !== null;
+        if (nextStr.length > 11) return;
 
-      return (
-        <View style={styles.cartItem}>
-          <View style={styles.cartLeft}>
-            <View style={styles.cartMainRow}>
-              {item.image?.url ? (
-                <Image
-                  source={{ uri: item.image.url }}
-                  style={styles.productThumb}
-                />
-              ) : (
-                <View style={styles.productThumbFallback}>
-                  <Text style={styles.productThumbFallbackText}>
-                    {item.name?.slice(0, 1)?.toUpperCase() || "?"}
-                  </Text>
-                </View>
-              )}
-
-              <View style={{ flex: 1 }}>
-                <Text style={styles.cartName} numberOfLines={2}>
-                  {item.name}
-                </Text>
-
-                <Text style={styles.cartMeta} numberOfLines={1}>
-                  SKU: {item.sku} • {item.unit || "---"}
-                </Text>
-
-                <Text style={styles.cartMeta} numberOfLines={1}>
-                  {formatPrice(unitPrice)} × {item.quantity} ={" "}
-                  <Text style={{ fontWeight: "900", color: COLORS.textStrong }}>
-                    {formatPrice(amount)}
-                  </Text>
-                </Text>
-
-                <View style={styles.cartPillsRow}>
-                  <View
-                    style={[
-                      styles.tagChip,
-                      isCustom && {
-                        backgroundColor: "#e0f2fe",
-                        borderColor: "#bae6fd",
-                      },
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.tagChipText,
-                        isCustom && { color: "#0284c7" },
-                      ]}
-                    >
-                      {SALE_TYPE_LABEL[item.saleType || "NORMAL"]}
-                    </Text>
-                  </View>
-
-                  <Pressable
-                    onPress={() => openPriceModal(item)}
-                    style={({ pressed }) => [
-                      styles.linkBtn,
-                      pressed && { opacity: 0.78 },
-                    ]}
-                    hitSlop={8}
-                  >
-                    <Text style={styles.linkBtnText}>Tuỳ chỉnh</Text>
-                  </Pressable>
-                </View>
-              </View>
-            </View>
-          </View>
-
-          <View style={styles.cartRight}>
-            <View style={styles.qtyRow}>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.qtyBtn,
-                  pressed && { opacity: 0.75 },
-                ]}
-                onPress={() =>
-                  updateQuantity(item.productId, item.quantity - 1)
-                }
-                hitSlop={8}
-              >
-                <Text style={styles.qtyBtnText}>−</Text>
-              </Pressable>
-
-              <Text style={styles.qtyText}>{item.quantity}</Text>
-
-              <Pressable
-                style={({ pressed }) => [
-                  styles.qtyBtn,
-                  pressed && { opacity: 0.75 },
-                ]}
-                onPress={() =>
-                  updateQuantity(item.productId, item.quantity + 1)
-                }
-                hitSlop={8}
-              >
-                <Text style={styles.qtyBtnText}>+</Text>
-              </Pressable>
-            </View>
-
-            <Pressable
-              style={({ pressed }) => [
-                styles.removeBtn,
-                pressed && { opacity: 0.8 },
-              ]}
-              onPress={() => removeItem(item.productId)}
-              hitSlop={8}
-            >
-              <Text style={styles.removeBtnText}>Xoá</Text>
-            </Pressable>
-          </View>
-        </View>
-      );
+        t.cashReceived = parseInt(nextStr);
+      });
     },
-    [openPriceModal, removeItem, updateQuantity]
+    [updateOrderTab]
   );
 
-  // ===== render loading =====
+  // Polling check QR Payment (Auto like Web)
+  useEffect(() => {
+    const orderCode = currentTab.qrPayload;
+    if (
+      !orderCode ||
+      !currentTab.qrImageUrl ||
+      !currentTab.pendingOrderId ||
+      currentTab.isPaid
+    ) {
+      return;
+    }
+
+    let isActive = true;
+    const pendingOrderId = currentTab.pendingOrderId;
+
+    const checkPayment = async () => {
+      if (!storeId || !orderCode) return;
+
+      try {
+        const res: any = await apiClient.get(
+          `/orders/pos/payment-status/${orderCode}`,
+          {
+            params: { storeId },
+            headers: authHeaders,
+          }
+        );
+
+        if (
+          isActive &&
+          res?.data?.success &&
+          String(res?.data?.status).toUpperCase() === "PAID"
+        ) {
+          // Stop polling
+          clearInterval(pollId);
+
+          // Update local state
+          updateOrderTab((tab) => {
+            tab.isPaid = true;
+          });
+
+          // Show success and ask to print
+          Alert.alert(
+            "Thành công",
+            "Đã nhận thanh toán QR! Bạn có muốn in hóa đơn không?",
+            [
+              {
+                text: "Không",
+                style: "cancel",
+                onPress: () => {
+                  setQrModal(false);
+                  setBillModal(false);
+                  resetCurrentTab();
+                },
+              },
+              {
+                text: "In hóa đơn",
+                onPress: () => {
+                  setQrModal(false);
+                  triggerPrint(pendingOrderId, true); // Pass true to reset after print
+                },
+              },
+            ]
+          );
+        }
+      } catch (e) {
+        // ignore
+      }
+    };
+
+    const pollId = setInterval(checkPayment, 3000);
+
+    return () => {
+      isActive = false;
+      clearInterval(pollId);
+    };
+  }, [
+    currentTab.qrPayload,
+    currentTab.qrImageUrl,
+    currentTab.pendingOrderId,
+    currentTab.isPaid,
+    storeId,
+    authHeaders,
+    updateOrderTab,
+    triggerPrint,
+  ]);
+
+  // ===== Animation Values =====
+  const HEADER_MAX = 180;
+  const HEADER_MIN = 90;
+  const SCROLL_DISTANCE = HEADER_MAX - HEADER_MIN;
+
+  const headerHeight = scrollY.interpolate({
+    inputRange: [0, SCROLL_DISTANCE],
+    outputRange: [HEADER_MAX, HEADER_MIN],
+    extrapolate: "clamp",
+  });
+
+  const headerTranslateY = scrollY.interpolate({
+    inputRange: [0, SCROLL_DISTANCE],
+    outputRange: [0, -40],
+    extrapolate: "clamp",
+  });
+
+  const headerOpacity = scrollY.interpolate({
+    inputRange: [0, SCROLL_DISTANCE / 2],
+    outputRange: [1, 0],
+    extrapolate: "clamp",
+  });
+
+  // ===== Loading State =====
   if (loadingInit) {
     return (
-      <SafeAreaView style={styles.safe}>
-        <StatusBar barStyle="dark-content" backgroundColor={COLORS.surface} />
-        <View style={styles.center}>
+      <SafeAreaView style={styles.safeContainer}>
+        <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
+        <View style={styles.centerContainer}>
           <ActivityIndicator size="large" color={COLORS.primary} />
-          <Text style={styles.mutedText}>Đang tải...</Text>
+          <Text style={styles.loadingText}>Đang tải ứng dụng...</Text>
         </View>
       </SafeAreaView>
     );
   }
 
-  // ===== bottom actions computed =====
-  const canCreateOrder = currentTab.cart.length > 0 && !loading;
-  const canContinueQr =
-    !!currentTab.pendingOrderId && currentTab.paymentMethod === "qr";
-  const canOpenBill = !!currentTab.pendingOrderId;
+  // ===== Cart Item Component =====
+  const CartItemRow = React.memo(({ item }: { item: CartItem }) => {
+    const unitPrice = getItemUnitPrice(item);
+    const amount = unitPrice * item.quantity;
+    const isCustom =
+      (item.saleType && item.saleType !== "NORMAL") ||
+      item.overridePrice !== null;
 
-  const primaryActionText =
-    currentTab.paymentMethod === "qr" ? "Tạo QR" : "Tạo đơn";
+    return (
+      <Card style={styles.cartItemCard}>
+        <View style={styles.cartItemHeader}>
+          <View style={styles.cartItemImageContainer}>
+            {item.image?.url ? (
+              <Image
+                source={{ uri: item.image.url }}
+                style={styles.cartItemImage}
+              />
+            ) : (
+              <View style={styles.cartItemImagePlaceholder}>
+                <Ionicons name="cube-outline" size={24} color={COLORS.muted} />
+              </View>
+            )}
+          </View>
 
-  return (
-    <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="dark-content" backgroundColor={COLORS.surface} />
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
-        {/* Header */}
-        <View style={styles.header}>
-          <View style={styles.headerTopRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.headerTitle} numberOfLines={1}>
-                {storeName}
-              </Text>
-              <Text style={styles.headerSub}>POS • Bán hàng</Text>
+          <View style={styles.cartItemInfo}>
+            <Text style={styles.cartItemName} numberOfLines={1}>
+              {item.name}
+            </Text>
+            <View style={styles.cartItemMeta}>
+              <Text style={styles.cartItemSku}>{item.sku}</Text>
+              <Text style={styles.cartItemUnit}>• {item.unit}</Text>
+              {item.batchCode && (
+                <Text style={styles.cartItemBatch}>• Lô: {item.batchCode}</Text>
+              )}
             </View>
 
-            <IconTextButton
-              type="ghost"
-              text="Reset"
+            {item.expiryDate && (
+              <Text style={styles.cartItemExpiry}>
+                HSD: {new Date(item.expiryDate).toLocaleDateString("vi-VN")}
+              </Text>
+            )}
+
+            {item.tax_rate !== undefined && item.tax_rate !== 0 && (
+              <View style={styles.taxBadge}>
+                <Ionicons
+                  name="receipt-outline"
+                  size={12}
+                  color={COLORS.warning}
+                />
+                <Text style={styles.taxText}>
+                  Thuế: {item.tax_rate === -1 ? "Ko thuế" : `${item.tax_rate}%`}
+                </Text>
+              </View>
+            )}
+          </View>
+
+          <TouchableOpacity
+            style={styles.priceEditButton}
+            onPress={() => openPriceModal(item)}
+          >
+            <Text style={styles.priceEditText}>
+              {formatPrice(unitPrice)}
+              {isCustom && <Text style={styles.customPriceIndicator}> *</Text>}
+            </Text>
+            <Ionicons name="create-outline" size={14} color={COLORS.muted} />
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.cartItemFooter}>
+          <View style={styles.quantityControls}>
+            {[5, 10, 20].map((q) => (
+              <TouchableOpacity
+                key={q}
+                style={styles.quickQuantityButton}
+                onPress={() => updateQuantity(item.productId, item.batchId, q)}
+              >
+                <Text style={styles.quickQuantityText}>{q}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <View style={styles.quantityContainer}>
+            <TouchableOpacity
+              style={styles.quantityButton}
+              onPress={() =>
+                updateQuantity(item.productId, item.batchId, item.quantity - 1)
+              }
+            >
+              <Text style={styles.quantityButtonText}>-</Text>
+            </TouchableOpacity>
+
+            <View style={styles.quantityValueContainer}>
+              <Text style={styles.quantityValue}>{item.quantity}</Text>
+            </View>
+
+            <TouchableOpacity
+              style={styles.quantityButton}
+              onPress={() =>
+                updateQuantity(item.productId, item.batchId, item.quantity + 1)
+              }
+            >
+              <Text style={styles.quantityButtonText}>+</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.cartItemActions}>
+            <Text style={styles.cartItemSubtotal}>{formatPrice(amount)}</Text>
+            <IconButton
+              icon="trash-outline"
+              onPress={() => removeItem(item.productId, item.batchId)}
+              color={COLORS.danger}
+              style={styles.removeButton}
+            />
+          </View>
+        </View>
+      </Card>
+    );
+  });
+
+  return (
+    <View style={styles.safeContainer}>
+      <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
+
+      {/* Search Backdrop */}
+      {isSearchFocused && (
+        <Pressable
+          style={styles.searchBackdrop}
+          onPress={() => {
+            setShowProductDropdown(false);
+            setIsSearchFocused(false);
+            Keyboard.dismiss();
+          }}
+        />
+      )}
+
+      {/* Sticky Header */}
+      <Animated.View style={[styles.header, { height: headerHeight }]}>
+        <Animated.View
+          style={{
+            opacity: headerOpacity,
+            transform: [{ translateY: headerTranslateY }],
+          }}
+        >
+          <View style={styles.headerTop}>
+            <View style={styles.storeInfoContainer}>
+              <Text style={styles.storeName} numberOfLines={1}>
+                {storeName}
+              </Text>
+              <Text style={styles.storeSubtitle}>
+                POS • Bán hàng chuyên nghiệp
+              </Text>
+            </View>
+
+            <Button
+              title="Reset"
+              variant="ghost"
               onPress={() => {
                 Alert.alert(
-                  "Reset đơn",
-                  "Bạn có chắc muốn reset đơn hiện tại?",
+                  "Xác nhận",
+                  "Bạn có chắc muốn reset đơn hàng hiện tại?",
                   [
-                    { text: "Huỷ", style: "cancel" },
+                    { text: "Hủy", style: "cancel" },
                     {
                       text: "Reset",
-                      style: "destructive",
                       onPress: resetCurrentTab,
+                      style: "destructive",
                     },
                   ]
                 );
               }}
-              style={{ paddingVertical: 10, paddingHorizontal: 12 }}
+              icon="refresh-outline"
+              size="sm"
             />
           </View>
 
@@ -1581,399 +2232,597 @@ const OrderPOSHomeScreen: React.FC = () => {
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
-            style={{ marginTop: SPACING.sm }}
+            style={styles.tabsScrollView}
+            contentContainerStyle={styles.tabsContentContainer}
           >
-            <View
-              style={{ flexDirection: "row", gap: 10, alignItems: "center" }}
-            >
-              {orders.map((t) => {
-                const active = t.key === activeTab;
-                return (
-                  <View
-                    key={t.key}
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      gap: 8,
-                    }}
+            {orders.map((t) => {
+              const active = t.key === activeTab;
+              return (
+                <View key={t.key} style={styles.tabWrapper}>
+                  <TouchableOpacity
+                    style={[styles.tabButton, active && styles.tabButtonActive]}
+                    onPress={() => setActiveTab(t.key)}
                   >
-                    <Pill
-                      label={`Đơn ${t.key}`}
-                      active={active}
-                      onPress={() => setActiveTab(t.key)}
-                    />
-                    {orders.length > 1 ? (
-                      <Pressable
-                        onPress={() => removeOrderTab(t.key)}
-                        style={({ pressed }) => [
-                          styles.iconClose,
-                          pressed && { opacity: 0.8 },
-                        ]}
-                        hitSlop={8}
-                      >
-                        <Text style={styles.iconCloseText}>×</Text>
-                      </Pressable>
-                    ) : null}
-                  </View>
-                );
-              })}
-
-              <IconTextButton
-                type="outline"
-                text="+ Đơn mới"
-                onPress={addNewOrderTab}
-                style={{ paddingHorizontal: 14 }}
-              />
-            </View>
-          </ScrollView>
-
-          {/* Search product */}
-          <View style={{ marginTop: SPACING.md }}>
-            <View style={styles.searchBox}>
-              <Text style={styles.searchIcon}>⌕</Text>
-              <TextInput
-                value={searchProduct}
-                onChangeText={(t) => {
-                  setSearchProduct(t);
-                  setShowProductDropdown(true);
-                }}
-                onFocus={() => setShowProductDropdown(true)}
-                onBlur={() => {
-                  setTimeout(() => {
-                    if (!selectingProductRef.current)
-                      setShowProductDropdown(false);
-                  }, 180);
-                }}
-                placeholder="Tìm sản phẩm (tên / SKU)..."
-                placeholderTextColor={COLORS.placeholder}
-                style={styles.searchInput}
-                returnKeyType="search"
-              />
-              {!!searchProduct && (
-                <Pressable
-                  onPress={() => {
-                    setSearchProduct("");
-                    setSearchedProducts([]);
-                    setShowProductDropdown(false);
-                  }}
-                  hitSlop={10}
-                  style={({ pressed }) => [
-                    styles.searchClear,
-                    pressed && { opacity: 0.8 },
-                  ]}
-                >
-                  <Text style={styles.searchClearText}>×</Text>
-                </Pressable>
-              )}
-            </View>
-
-            {showProductDropdown ? (
-              <View style={styles.dropdown}>
-                {productSearchLoading ? (
-                  <View style={styles.dropdownLoadingRow}>
-                    <ActivityIndicator color={COLORS.primary} />
-                    <Text style={styles.hint}>Đang tìm...</Text>
-                  </View>
-                ) : productSearchError ? (
-                  <View style={{ padding: 14 }}>
                     <Text
-                      style={[
-                        styles.hint,
-                        { color: COLORS.danger, fontWeight: "900" },
-                      ]}
+                      style={[styles.tabText, active && styles.tabTextActive]}
                     >
-                      {productSearchError}
+                      Đơn {t.key}
                     </Text>
-                  </View>
-                ) : suggestedProducts.length === 0 ? (
-                  <View style={{ padding: 14 }}>
-                    <Text style={styles.hint}>Không có kết quả.</Text>
-                  </View>
-                ) : (
-                  <ScrollView
-                    style={{ maxHeight: 270 }}
-                    keyboardShouldPersistTaps="always"
-                  >
-                    {suggestedProducts.map((p) => (
-                      <Pressable
-                        key={p._id}
-                        onPressIn={() => (selectingProductRef.current = true)}
-                        onPressOut={() => (selectingProductRef.current = false)}
-                        onPress={() => addToCart(p)}
-                        style={({ pressed }) => [
-                          styles.dropdownItem,
-                          pressed && { backgroundColor: "#eff6ff" },
-                        ]}
-                      >
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.dropdownTitle} numberOfLines={1}>
-                            {p.name}
-                          </Text>
-                          <Text style={styles.hint} numberOfLines={1}>
-                            SKU: {p.sku} • {p.unit} • {formatPrice(p.price)} •
-                            Tồn: {p.stock_quantity}
-                          </Text>
-                        </View>
-                        <Text style={styles.addHint}>Thêm</Text>
-                      </Pressable>
-                    ))}
-                  </ScrollView>
-                )}
-              </View>
-            ) : null}
-          </View>
-        </View>
+                  </TouchableOpacity>
 
-        {/* Body */}
-        <ScrollView
-          contentContainerStyle={styles.container}
-          keyboardShouldPersistTaps="always"
-          showsVerticalScrollIndicator={false}
-        >
-          {/* Employee */}
-          <Section
-            title="Nhân viên bán"
-            subtitle="Người thực hiện đơn hàng"
-            right={
-              <IconTextButton
-                type="outline"
-                text="Chọn"
-                onPress={() => setEmployeeModalOpen(true)}
-                style={{ height: 36 }}
-              />
-            }
-          >
-            <Text style={styles.valueText}>{employeeLabel}</Text>
-            {currentUserEmployee?.isOwner ? (
-              <Text style={styles.hint}>
-                Nếu chọn “Chủ cửa hàng” thì employeeId gửi lên API sẽ là null.
-              </Text>
-            ) : null}
-          </Section>
+                  {orders.length > 1 && (
+                    <TouchableOpacity
+                      style={styles.tabCloseButton}
+                      onPress={() => removeOrderTab(t.key)}
+                    >
+                      <Ionicons
+                        name="close"
+                        size={14}
+                        color={active ? COLORS.primary : COLORS.muted}
+                      />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              );
+            })}
 
-          {/* Customer */}
-          <Section
-            title="Khách hàng"
-            subtitle="Nhập số điện thoại để tìm / tạo khách"
-            right={
-              <IconTextButton
-                type="outline"
-                text="+ Thêm"
-                onPress={() => {
-                  setNewCustomerName("");
-                  setNewCustomerPhone(phoneInput || tempPhone || "");
-                  setNewCustomerModalOpen(true);
-                }}
-                style={{ height: 36 }}
-              />
-            }
+            <TouchableOpacity
+              style={styles.addTabButton}
+              onPress={addNewOrderTab}
+            >
+              <Ionicons name="add" size={24} color={COLORS.primary} />
+            </TouchableOpacity>
+          </ScrollView>
+        </Animated.View>
+
+        {/* Search Section */}
+        <View style={styles.searchSection}>
+          <View
+            style={[
+              styles.searchContainer,
+              isSearchFocused && styles.searchContainerFocused,
+            ]}
           >
-            <TextInput
-              value={phoneInput}
-              onChangeText={onChangePhoneInput}
-              onFocus={() => setShowCustomerDropdown(true)}
-              onBlur={() => {
-                setTimeout(() => {
-                  if (!selectingCustomerRef.current)
-                    setShowCustomerDropdown(false);
-                }, 180);
-              }}
-              placeholder="Nhập SĐT khách hàng..."
-              placeholderTextColor={COLORS.placeholder}
-              style={styles.input}
-              keyboardType="phone-pad"
+            <Ionicons
+              name="search"
+              size={20}
+              color={isSearchFocused ? COLORS.primary : COLORS.muted}
             />
 
-            {showCustomerDropdown && foundCustomers.length > 0 ? (
-              <View style={[styles.dropdown, { marginTop: 10 }]}>
-                <ScrollView
-                  style={{ maxHeight: 220 }}
-                  keyboardShouldPersistTaps="always"
-                >
-                  {foundCustomers.map((c) => (
-                    <Pressable
-                      key={c._id}
-                      onPressIn={() => (selectingCustomerRef.current = true)}
-                      onPressOut={() => (selectingCustomerRef.current = false)}
-                      onPress={() => selectCustomer(c)}
-                      style={({ pressed }) => [
-                        styles.dropdownItem,
-                        pressed && { backgroundColor: "#eff6ff" },
+            <TextInput
+              value={searchProduct}
+              onChangeText={(text) => {
+                setSearchProduct(text);
+                setShowProductDropdown(true);
+              }}
+              onFocus={() => {
+                setShowProductDropdown(true);
+                setIsSearchFocused(true);
+              }}
+              onBlur={() => {
+                setTimeout(() => {
+                  if (!selectingProductRef.current) {
+                    setShowProductDropdown(false);
+                  }
+                }, 180);
+              }}
+              placeholder="Tìm sản phẩm, mã SKU..."
+              placeholderTextColor={COLORS.placeholder}
+              style={styles.searchInput}
+              returnKeyType="search"
+            />
+
+            {searchProduct.length > 0 && (
+              <TouchableOpacity
+                onPress={() => {
+                  setSearchProduct("");
+                  setSearchedProducts([]);
+                  setShowProductDropdown(false);
+                }}
+                style={styles.clearSearchButton}
+              >
+                <Ionicons name="close-circle" size={20} color={COLORS.muted} />
+              </TouchableOpacity>
+            )}
+
+            <TouchableOpacity
+              style={styles.searchActionButton}
+              onPress={() =>
+                Alert.alert("Thông báo", "Chức năng quét mã đang phát triển")
+              }
+            >
+              <Ionicons
+                name="barcode-outline"
+                size={20}
+                color={COLORS.primary}
+              />
+            </TouchableOpacity>
+          </View>
+
+          {/* Product Dropdown */}
+          {showProductDropdown && searchedProducts.length > 0 && (
+            <View style={styles.productDropdown}>
+              <ScrollView
+                style={styles.dropdownScrollView}
+                keyboardShouldPersistTaps="always"
+              >
+                {searchedProducts.map((p) => {
+                  const avail = getAvailableStock(p);
+                  const isOut = avail <= 0;
+
+                  return (
+                    <TouchableOpacity
+                      key={p._id}
+                      onPress={() => !isOut && addToCart(p)}
+                      onPressIn={() => (selectingProductRef.current = true)}
+                      onPressOut={() => (selectingProductRef.current = false)}
+                      style={[
+                        styles.productItem,
+                        isOut && styles.productItemDisabled,
                       ]}
+                      disabled={isOut}
                     >
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.dropdownTitle}>{c.name}</Text>
-                        <Text style={styles.hint}>
-                          {c.phone} • Điểm:{" "}
-                          {(c.loyaltyPoints || 0).toLocaleString("vi-VN")}
-                        </Text>
+                      <View style={styles.productItemImageContainer}>
+                        {p.image?.url ? (
+                          <Image
+                            source={{ uri: p.image.url }}
+                            style={styles.productItemImage}
+                          />
+                        ) : (
+                          <View style={styles.productItemImagePlaceholder}>
+                            <Ionicons
+                              name="cube"
+                              size={20}
+                              color={COLORS.muted}
+                            />
+                          </View>
+                        )}
                       </View>
-                      <Text style={styles.addHint}>Chọn</Text>
-                    </Pressable>
-                  ))}
-                </ScrollView>
-              </View>
-            ) : null}
 
-            <View style={{ marginTop: 10 }}>
-              <Text style={styles.hint}>
-                Đang chọn:{" "}
-                {currentTab.customer
-                  ? `${currentTab.customer.name} (${currentTab.customer.phone})`
-                  : "Khách vãng lai"}
-              </Text>
+                      <View style={styles.productItemInfo}>
+                        <Text style={styles.productItemName} numberOfLines={1}>
+                          {p.name}
+                        </Text>
+                        <Text style={styles.productItemSku}>{p.sku}</Text>
+                      </View>
+
+                      <View style={styles.productItemRight}>
+                        <Text style={styles.productItemPrice}>
+                          {formatPrice(p.price)}
+                        </Text>
+                        <View
+                          style={[
+                            styles.stockBadge,
+                            isOut && styles.stockBadgeOut,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.stockText,
+                              isOut && styles.stockTextOut,
+                            ]}
+                          >
+                            {isOut ? "Hết" : avail}
+                          </Text>
+                        </View>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
             </View>
+          )}
+        </View>
+      </Animated.View>
 
-            {PointsBlock}
-          </Section>
+      {/* Main Content */}
+      <KeyboardAvoidingView
+        style={styles.keyboardAvoidingView}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+      >
+        <Animated.ScrollView
+          ref={scrollViewRef}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          scrollEventThrottle={16}
+          onScroll={Animated.event(
+            [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+            { useNativeDriver: false }
+          )}
+        >
+          {/* Quick Info Bar */}
+          <View style={styles.quickInfoBar}>
+            <TouchableOpacity
+              style={styles.employeeSelector}
+              onPress={() => setEmployeeModal(true)}
+            >
+              <View style={styles.employeeIconContainer}>
+                <Ionicons
+                  name="person-outline"
+                  size={16}
+                  color={COLORS.primary}
+                />
+              </View>
+              <View style={styles.employeeInfo}>
+                <Text style={styles.employeeLabel}>NHÂN VIÊN</Text>
+                <Text style={styles.employeeName} numberOfLines={1}>
+                  {employeeLabel}
+                </Text>
+              </View>
+              <Ionicons name="chevron-down" size={16} color={COLORS.muted} />
+            </TouchableOpacity>
 
-          {/* Cart */}
+            <View style={styles.customerInfo}>
+              <View style={styles.customerIconContainer}>
+                <Ionicons name="people-outline" size={20} color={COLORS.text} />
+              </View>
+              <View style={styles.customerDetails}>
+                <Text style={styles.customerLabel}>KHÁCH HÀNG</Text>
+                <Text style={styles.customerName} numberOfLines={1}>
+                  {currentTab.customer
+                    ? currentTab.customer.name
+                    : "Khách vãng lai"}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.changeCustomerButton}
+                onPress={() => setNewCustomerModal(true)}
+              >
+                <Text style={styles.changeCustomerText}>ĐỔI</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Loyalty Points */}
+          {loyaltySetting?.isActive && currentTab.customer && (
+            <View style={styles.loyaltyCard}>
+              <Ionicons name="gift-outline" size={20} color={COLORS.warning} />
+              <Text style={styles.loyaltyText}>
+                Có{" "}
+                {currentTab.customer.loyaltyPoints?.toLocaleString("vi-VN") ||
+                  0}{" "}
+                điểm
+              </Text>
+
+              <TouchableOpacity
+                style={[
+                  styles.loyaltyToggle,
+                  currentTab.usedPointsEnabled && styles.loyaltyToggleActive,
+                ]}
+                onPress={() =>
+                  updateOrderTab((t) => {
+                    const nextState = !t.usedPointsEnabled;
+                    t.usedPointsEnabled = nextState;
+                    if (nextState) {
+                      t.usedPoints = t.customer?.loyaltyPoints || 0;
+                    } else {
+                      t.usedPoints = 0;
+                    }
+                  })
+                }
+              >
+                <Text
+                  style={[
+                    styles.loyaltyToggleText,
+                    currentTab.usedPointsEnabled &&
+                      styles.loyaltyToggleTextActive,
+                  ]}
+                >
+                  {currentTab.usedPointsEnabled ? "BẬT" : "TẮT"}
+                </Text>
+              </TouchableOpacity>
+
+              {currentTab.usedPointsEnabled && (
+                <View style={styles.pointsInputContainer}>
+                  <TextInput
+                    value={String(currentTab.usedPoints || 0)}
+                    onChangeText={(txt) => {
+                      const max = currentTab.customer?.loyaltyPoints || 0;
+                      const n = clampInt(txt, 0, max);
+                      updateOrderTab((t) => (t.usedPoints = n));
+                    }}
+                    keyboardType="numeric"
+                    style={styles.pointsInput}
+                    placeholder="0"
+                  />
+                  <TouchableOpacity
+                    onPress={() =>
+                      updateOrderTab(
+                        (t) => (t.usedPoints = t.customer?.loyaltyPoints || 0)
+                      )
+                    }
+                  >
+                    <Text style={styles.maxPointsText}>MAX</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+          )}
+
+          {/* Cart Section */}
           <Section
             title="Giỏ hàng"
-            subtitle="Sản phẩm đã chọn"
+            subtitle={`${currentTab.cart.length} sản phẩm`}
             right={<Badge value={currentTab.cart.length} />}
           >
             {currentTab.cart.length === 0 ? (
-              <Text style={styles.mutedText}>Chưa có sản phẩm.</Text>
+              <View style={styles.emptyCart}>
+                <Ionicons name="cart-outline" size={48} color={COLORS.muted} />
+                <Text style={styles.emptyCartText}>Chưa có sản phẩm</Text>
+                <Text style={styles.emptyCartSubtext}>
+                  Tìm kiếm và thêm sản phẩm vào giỏ hàng
+                </Text>
+              </View>
             ) : (
               <FlatList
                 data={currentTab.cart}
-                keyExtractor={(i) => i.productId}
+                keyExtractor={(i) => `${i.productId}_${i.batchId || "nobatch"}`}
                 scrollEnabled={false}
-                renderItem={CartRow as any}
-                ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+                renderItem={({ item }) => <CartItemRow item={item} />}
+                ItemSeparatorComponent={() => (
+                  <View style={styles.cartItemSeparator} />
+                )}
               />
             )}
           </Section>
 
-          {/* Payment */}
-          <Section
-            title="Thanh toán"
-            subtitle="Tổng kết đơn hàng & phương thức"
-          >
-            <View style={styles.rowBetween}>
-              <Text style={styles.mutedInline}>Tạm tính</Text>
-              <Text style={styles.valueText}>{formatPrice(subtotal)}</Text>
+          {/* Payment Section */}
+          <Section title="Thanh toán" subtitle="Tổng kết đơn hàng">
+            {/* Price Breakdown */}
+            <View style={styles.priceBreakdown}>
+              <View style={styles.priceRow}>
+                <Text style={styles.priceLabel}>Tạm tính</Text>
+                <Text style={styles.priceValue}>{formatPrice(subtotal)}</Text>
+              </View>
+
+              {vatAmount > 0 && (
+                <View style={styles.priceRow}>
+                  <Text style={[styles.priceLabel, { color: COLORS.warning }]}>
+                    Thuế GTGT (Tự động)
+                  </Text>
+                  <Text style={[styles.priceValue, { color: COLORS.warning }]}>
+                    +{formatPrice(vatAmount)}
+                  </Text>
+                </View>
+              )}
+
+              {discount > 0 && (
+                <View style={styles.priceRow}>
+                  <Text style={[styles.priceLabel, { color: COLORS.success }]}>
+                    Giảm giá điểm
+                  </Text>
+                  <Text style={[styles.priceValue, { color: COLORS.success }]}>
+                    -{formatPrice(discount)}
+                  </Text>
+                </View>
+              )}
+
+              <Divider style={styles.priceDivider} />
+
+              <View style={styles.totalRow}>
+                <Text style={styles.totalLabel}>THANH TOÁN</Text>
+                <Text style={styles.totalAmount}>
+                  {formatPrice(totalAmount)}
+                </Text>
+              </View>
             </View>
 
-            <View style={[styles.rowBetween, { marginTop: 10 }]}>
-              <Text style={styles.mutedInline}>Giảm từ điểm</Text>
-              <Text
+            {/* VAT Toggle */}
+            <View style={styles.vatToggleContainer}>
+              <Text style={styles.vatLabel}>Cung cấp hóa đơn VAT</Text>
+              <TouchableOpacity
                 style={[
-                  styles.valueText,
-                  { color: discount > 0 ? COLORS.good : COLORS.textStrong },
+                  styles.vatToggle,
+                  currentTab.isVAT && styles.vatToggleActive,
                 ]}
-              >
-                - {formatPrice(discount)}
-              </Text>
-            </View>
-
-            <View style={[styles.rowBetween, { marginTop: 12 }]}>
-              <Text style={styles.mutedInline}>VAT 10%</Text>
-              <Pressable
                 onPress={() => updateOrderTab((t) => (t.isVAT = !t.isVAT))}
-                style={[styles.toggle, currentTab.isVAT && styles.toggleOn]}
               >
                 <Text
                   style={[
-                    styles.toggleText,
-                    currentTab.isVAT && styles.toggleTextOn,
+                    styles.vatToggleText,
+                    currentTab.isVAT && styles.vatToggleTextActive,
                   ]}
                 >
                   {currentTab.isVAT ? "BẬT" : "TẮT"}
                 </Text>
-              </Pressable>
+              </TouchableOpacity>
             </View>
 
-            {currentTab.isVAT ? (
-              <View style={[styles.rowBetween, { marginTop: 10 }]}>
-                <Text style={[styles.mutedInline, { color: COLORS.warn }]}>
-                  Tiền VAT
-                </Text>
-                <Text style={[styles.valueText, { color: COLORS.warn }]}>
-                  {formatPrice(vatAmount)}
-                </Text>
+            {currentTab.isVAT && (
+              <View style={styles.vatInfoContainer}>
+                <Input
+                  value={currentTab.companyName}
+                  onChangeText={(text) =>
+                    updateOrderTab((t) => (t.companyName = text))
+                  }
+                  placeholder="Tên công ty"
+                  style={styles.vatInput}
+                />
+                <Input
+                  value={currentTab.taxCode}
+                  onChangeText={(text) =>
+                    updateOrderTab((t) => (t.taxCode = text))
+                  }
+                  placeholder="Mã số thuế"
+                  style={styles.vatInput}
+                />
+                <Input
+                  value={currentTab.companyAddress}
+                  onChangeText={(text) =>
+                    updateOrderTab((t) => (t.companyAddress = text))
+                  }
+                  placeholder="Địa chỉ"
+                  multiline
+                  numberOfLines={2}
+                  style={styles.vatInput}
+                />
               </View>
-            ) : null}
+            )}
 
-            <View style={[styles.totalBox, { marginTop: 14 }]}>
-              <Text style={styles.totalLabel}>Khách phải trả</Text>
-              <Text style={styles.totalValue}>{formatPrice(totalAmount)}</Text>
-            </View>
-
-            <Text style={[styles.mutedInline, { marginTop: 14 }]}>
-              Phương thức
+            {/* Payment Method */}
+            <Text style={styles.paymentMethodLabel}>
+              Phương thức thanh toán
             </Text>
-
-            <View style={styles.pmRow}>
-              <Pressable
+            <View style={styles.paymentMethodContainer}>
+              <TouchableOpacity
+                style={[
+                  styles.paymentMethodButton,
+                  currentTab.paymentMethod === "cash" &&
+                    styles.paymentMethodButtonActive,
+                ]}
                 onPress={() =>
                   updateOrderTab((t) => (t.paymentMethod = "cash"))
                 }
-                style={[
-                  styles.pmBtn,
-                  currentTab.paymentMethod === "cash" && styles.pmBtnActive,
-                ]}
               >
+                <Ionicons
+                  name="cash-outline"
+                  size={20}
+                  color={
+                    currentTab.paymentMethod === "cash"
+                      ? COLORS.primary
+                      : COLORS.text
+                  }
+                />
                 <Text
                   style={[
-                    styles.pmBtnText,
+                    styles.paymentMethodText,
                     currentTab.paymentMethod === "cash" &&
-                      styles.pmBtnTextActive,
+                      styles.paymentMethodTextActive,
                   ]}
                 >
                   Tiền mặt
                 </Text>
-              </Pressable>
+              </TouchableOpacity>
 
-              <Pressable
-                onPress={() => updateOrderTab((t) => (t.paymentMethod = "qr"))}
+              <TouchableOpacity
                 style={[
-                  styles.pmBtn,
-                  currentTab.paymentMethod === "qr" && styles.pmBtnActive,
+                  styles.paymentMethodButton,
+                  currentTab.paymentMethod === "qr" &&
+                    styles.paymentMethodButtonActive,
                 ]}
+                onPress={() => updateOrderTab((t) => (t.paymentMethod = "qr"))}
               >
+                <Ionicons
+                  name="qr-code-outline"
+                  size={20}
+                  color={
+                    currentTab.paymentMethod === "qr"
+                      ? COLORS.primary
+                      : COLORS.text
+                  }
+                />
                 <Text
                   style={[
-                    styles.pmBtnText,
-                    currentTab.paymentMethod === "qr" && styles.pmBtnTextActive,
+                    styles.paymentMethodText,
+                    currentTab.paymentMethod === "qr" &&
+                      styles.paymentMethodTextActive,
                   ]}
                 >
                   QR
                 </Text>
-              </Pressable>
+              </TouchableOpacity>
             </View>
 
-            {currentTab.paymentMethod === "cash" ? (
-              <View style={{ marginTop: 14 }}>
-                <Text style={styles.mutedInline}>Tiền khách đưa</Text>
-                <TextInput
-                  value={String(currentTab.cashReceived || 0)}
-                  onChangeText={(txt) => {
-                    const n = clampInt(txt, 0);
-                    updateOrderTab((t) => (t.cashReceived = n));
-                  }}
-                  keyboardType="numeric"
-                  placeholder="0"
-                  placeholderTextColor={COLORS.placeholder}
-                  style={styles.input}
-                />
+            {/* Cash Payment Section */}
+            {currentTab.paymentMethod === "cash" && (
+              <View style={styles.cashPaymentContainer}>
+                <Text style={styles.cashReceivedLabel}>Tiền khách đưa</Text>
 
+                <View style={styles.cashAmountContainer}>
+                  <Text style={styles.cashAmountText}>
+                    {formatPrice(currentTab.cashReceived || 0)}
+                  </Text>
+                </View>
+
+                {/* Quick Amount Suggestions */}
+                <View style={styles.quickAmountsContainer}>
+                  {[totalAmount, 50000, 100000, 200000, 500000].map(
+                    (amt, idx) => {
+                      if (amt <= 0) return null;
+                      if (idx > 0 && amt === totalAmount) return null;
+
+                      return (
+                        <TouchableOpacity
+                          key={idx}
+                          style={styles.quickAmountButton}
+                          onPress={() =>
+                            updateOrderTab((t) => (t.cashReceived = amt))
+                          }
+                        >
+                          <Text style={styles.quickAmountText}>
+                            {formatPrice(amt)}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    }
+                  )}
+                </View>
+
+                {/* Numpad */}
+                <View style={styles.numpadContainer}>
+                  {[
+                    ["1", "2", "3"],
+                    ["4", "5", "6"],
+                    ["7", "8", "9"],
+                  ].map((row, i) => (
+                    <View key={i} style={styles.numpadRow}>
+                      {row.map((n) => (
+                        <TouchableOpacity
+                          key={n}
+                          style={styles.numpadButton}
+                          onPress={() => handleNumpadPress(n)}
+                        >
+                          <Text style={styles.numpadButtonText}>{n}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  ))}
+
+                  <View style={styles.numpadRow}>
+                    <TouchableOpacity
+                      style={[styles.numpadButton, styles.numpadActionButton]}
+                      onPress={() => handleNumpadPress("C")}
+                    >
+                      <Text style={styles.numpadActionText}>XOÁ</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.numpadButton}
+                      onPress={() => handleNumpadPress("0")}
+                    >
+                      <Text style={styles.numpadButtonText}>0</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.numpadButton}
+                      onPress={() => handleNumpadPress("000")}
+                    >
+                      <Text style={styles.numpadButtonText}>000</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Change Amount */}
                 <View
                   style={[
-                    styles.changeBox,
+                    styles.changeContainer,
                     {
-                      borderColor: changeAmount >= 0 ? "#bbf7d0" : "#fecaca",
                       backgroundColor:
-                        changeAmount >= 0 ? "#f0fdf4" : "#fff1f2",
+                        changeAmount >= 0
+                          ? COLORS.successLight
+                          : COLORS.dangerLight,
+                      borderColor:
+                        changeAmount >= 0 ? COLORS.success : COLORS.danger,
                     },
                   ]}
                 >
                   <Text
                     style={[
-                      styles.totalLabel,
+                      styles.changeLabel,
                       {
-                        color: changeAmount >= 0 ? COLORS.good : COLORS.danger,
+                        color:
+                          changeAmount >= 0 ? COLORS.success : COLORS.danger,
                       },
                     ]}
                   >
@@ -1981,9 +2830,10 @@ const OrderPOSHomeScreen: React.FC = () => {
                   </Text>
                   <Text
                     style={[
-                      styles.totalValue,
+                      styles.changeAmountText,
                       {
-                        color: changeAmount >= 0 ? COLORS.good : COLORS.danger,
+                        color:
+                          changeAmount >= 0 ? COLORS.success : COLORS.danger,
                       },
                     ]}
                   >
@@ -1993,123 +2843,121 @@ const OrderPOSHomeScreen: React.FC = () => {
                   </Text>
                 </View>
 
-                {currentTab.pendingOrderId ? (
-                  <IconTextButton
-                    type="danger"
-                    text="Xác nhận đã thu tiền"
-                    onPress={() => {
-                      Alert.alert(
-                        "Xác nhận",
-                        `Khách đã đưa đủ ${formatPrice(totalAmount)}?`,
-                        [
-                          { text: "Huỷ", style: "cancel" },
-                          {
-                            text: "Xác nhận",
-                            style: "destructive",
-                            onPress: confirmPaidCash,
-                          },
-                        ]
-                      );
-                    }}
-                    style={{ marginTop: 10 }}
+                {/* Confirm Cash Payment */}
+                {currentTab.pendingOrderId && !currentTab.isPaid && (
+                  <Button
+                    title="Xác nhận đã thu tiền"
+                    variant="danger"
+                    onPress={confirmPaidCash}
+                    style={styles.confirmPaymentButton}
+                    fullWidth
                   />
-                ) : null}
+                )}
               </View>
-            ) : null}
+            )}
           </Section>
 
-          {/* spacer for bottom bar */}
-          <View style={{ height: 108 }} />
-        </ScrollView>
+          {/* Bottom Spacer */}
+          <View style={styles.bottomSpacer} />
+        </Animated.ScrollView>
+      </KeyboardAvoidingView>
 
-        {/* Bottom Bar */}
-        <View style={styles.bottomBar}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.bottomBarLabel}>Khách phải trả</Text>
-            <Text style={styles.bottomBarTotal}>
-              {formatPrice(totalAmount)}
-            </Text>
-            {currentTab.pendingOrderId ? (
-              <Text style={styles.bottomBarHint}>
-                Mã đơn: {currentTab.pendingOrderId}
+      {/* Bottom Action Bar */}
+      <View style={styles.bottomBar}>
+        <View style={styles.bottomBarLeft}>
+          <Text style={styles.bottomBarLabel}>Khách phải trả</Text>
+          <Text style={styles.bottomBarTotal}>{formatPrice(totalAmount)}</Text>
+          <Text style={styles.bottomBarSubtext}>
+            {currentTab.pendingOrderId
+              ? `Mã đơn: ${currentTab.pendingOrderId.slice(-8)}`
+              : "Chưa tạo đơn"}
+          </Text>
+        </View>
+
+        <View style={styles.bottomBarRight}>
+          <View style={styles.paymentMethodChips}>
+            <TouchableOpacity
+              style={[
+                styles.paymentMethodChip,
+                currentTab.paymentMethod === "cash" &&
+                  styles.paymentMethodChipActive,
+              ]}
+              onPress={() => updateOrderTab((t) => (t.paymentMethod = "cash"))}
+            >
+              <Text
+                style={[
+                  styles.paymentMethodChipText,
+                  currentTab.paymentMethod === "cash" &&
+                    styles.paymentMethodChipTextActive,
+                ]}
+              >
+                CASH
               </Text>
-            ) : (
-              <Text style={styles.bottomBarHint}>Chưa tạo đơn</Text>
-            )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.paymentMethodChip,
+                currentTab.paymentMethod === "qr" &&
+                  styles.paymentMethodChipActive,
+              ]}
+              onPress={() => updateOrderTab((t) => (t.paymentMethod = "qr"))}
+            >
+              <Text
+                style={[
+                  styles.paymentMethodChipText,
+                  currentTab.paymentMethod === "qr" &&
+                    styles.paymentMethodChipTextActive,
+                ]}
+              >
+                QR
+              </Text>
+            </TouchableOpacity>
           </View>
 
-          <View style={{ gap: 8 }}>
-            <View style={{ flexDirection: "row", gap: 8 }}>
-              <Pressable
-                onPress={() =>
-                  updateOrderTab((t) => (t.paymentMethod = "cash"))
-                }
-                style={[
-                  styles.bottomChip,
-                  currentTab.paymentMethod === "cash" &&
-                    styles.bottomChipActive,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.bottomChipText,
-                    currentTab.paymentMethod === "cash" &&
-                      styles.bottomChipTextActive,
-                  ]}
-                >
-                  Cash
-                </Text>
-              </Pressable>
+          <View style={styles.actionButtons}>
+            <Button
+              title="Hóa đơn"
+              variant="outline"
+              disabled={!currentTab.pendingOrderId}
+              onPress={() => setBillModal(true)}
+              style={styles.billButton}
+            />
 
-              <Pressable
-                onPress={() => updateOrderTab((t) => (t.paymentMethod = "qr"))}
-                style={[
-                  styles.bottomChip,
-                  currentTab.paymentMethod === "qr" && styles.bottomChipActive,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.bottomChipText,
-                    currentTab.paymentMethod === "qr" &&
-                      styles.bottomChipTextActive,
-                  ]}
-                >
-                  QR
-                </Text>
-              </Pressable>
-            </View>
+            <Button
+              title={
+                loading
+                  ? "Đang xử lý..."
+                  : currentTab.pendingOrderId
+                    ? currentTab.paymentMethod === "qr"
+                      ? "Cập nhật QR"
+                      : "Cập nhật đơn"
+                    : currentTab.paymentMethod === "qr"
+                      ? "Tạo QR"
+                      : "Tạo đơn"
+              }
+              variant="primary"
+              disabled={currentTab.cart.length === 0}
+              onPress={createOrder}
+              loading={loading}
+              style={styles.createOrderButton}
+            />
+          </View>
 
-            <View style={{ flexDirection: "row", gap: 8 }}>
-              <IconTextButton
-                type="outline"
-                text="Hoá đơn"
-                disabled={!canOpenBill}
-                onPress={() => setBillModalOpen(true)}
-                style={{ flex: 1, height: 44 }}
-              />
-
-              <IconTextButton
-                type="primary"
-                text={loading ? "Đang xử lý..." : primaryActionText}
-                disabled={!canCreateOrder}
-                onPress={createOrder}
-                style={{ flex: 1.2, height: 44 }}
-              />
-            </View>
-
-            {canContinueQr && !currentTab.qrImageUrl ? (
-              <IconTextButton
-                type="outline"
-                text="Tiếp tục QR"
+          {currentTab.pendingOrderId &&
+            currentTab.paymentMethod === "qr" &&
+            !currentTab.qrImageUrl && (
+              <Button
+                title="Tiếp tục QR"
+                variant="outline"
                 onPress={() => {
                   if (currentTab.savedQrImageUrl) {
-                    updateOrderTab((t) => {
-                      t.qrImageUrl = t.savedQrImageUrl;
-                      t.qrPayload = t.savedQrPayload;
-                      t.qrExpiryTs = t.savedQrExpiryTs;
+                    updateOrderTab((tab) => {
+                      tab.qrImageUrl = tab.savedQrImageUrl;
+                      tab.qrPayload = tab.savedQrPayload;
+                      tab.qrExpiryTs = tab.savedQrExpiryTs;
                     });
-                    setQrModalOpen(true);
+                    setQrModal(true);
                   } else {
                     Alert.alert(
                       "Thông báo",
@@ -2117,927 +2965,1860 @@ const OrderPOSHomeScreen: React.FC = () => {
                     );
                   }
                 }}
-                style={{ height: 44 }}
+                style={styles.continueQrButton}
+                fullWidth
               />
-            ) : null}
-          </View>
+            )}
         </View>
+      </View>
 
-        {/* Employee picker modal */}
-        <Modal
-          visible={employeeModalOpen}
-          transparent
-          animationType="fade"
-          onRequestClose={() => setEmployeeModalOpen(false)}
-        >
-          <View style={styles.modalBackdrop}>
-            <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Chọn nhân viên bán</Text>
-              <Text style={styles.modalSubtitle}>
-                Chọn người thực hiện đơn hàng
-              </Text>
+      {/* Modals */}
 
-              <ScrollView
-                style={{ maxHeight: 360 }}
-                keyboardShouldPersistTaps="always"
-              >
-                {currentUserEmployee?.isOwner ? (
-                  <Pressable
-                    style={({ pressed }) => [
-                      styles.dropdownItem,
-                      pressed && { backgroundColor: "#eff6ff" },
-                    ]}
-                    onPress={() => {
-                      updateOrderTab((t) => (t.employeeId = null));
-                      setEmployeeModalOpen(false);
-                    }}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.dropdownTitle}>
+      {/* Employee Modal */}
+      <Modal
+        visible={employeeModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setEmployeeModal(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalContainer}>
+            <Text style={styles.modalTitle}>Chọn nhân viên bán hàng</Text>
+            <Text style={styles.modalSubtitle}>
+              Chọn người thực hiện đơn hàng
+            </Text>
+
+            <ScrollView style={styles.modalScrollView}>
+              {currentUserEmployee?.isOwner && (
+                <TouchableOpacity
+                  style={styles.employeeItem}
+                  onPress={() => {
+                    updateOrderTab((t) => (t.employeeId = null));
+                    setEmployeeModal(false);
+                  }}
+                >
+                  <View style={styles.employeeItemContent}>
+                    <Ionicons name="star" size={20} color={COLORS.warning} />
+                    <View style={styles.employeeItemInfo}>
+                      <Text style={styles.employeeItemName}>
                         {currentUserEmployee.fullName} (Chủ cửa hàng)
                       </Text>
-                      <Text style={styles.hint}>Gửi employeeId = null</Text>
+                      <Text style={styles.employeeItemHint}>
+                        Gửi employeeId = null
+                      </Text>
                     </View>
-                    <Text style={styles.addHint}>Chọn</Text>
-                  </Pressable>
-                ) : null}
+                  </View>
+                  <Text style={styles.employeeItemAction}>Chọn</Text>
+                </TouchableOpacity>
+              )}
 
-                {employees.map((e) => (
-                  <Pressable
-                    key={e._id}
-                    style={({ pressed }) => [
-                      styles.dropdownItem,
-                      pressed && { backgroundColor: "#eff6ff" },
-                    ]}
-                    onPress={() => {
-                      updateOrderTab((t) => (t.employeeId = e._id));
-                      setEmployeeModalOpen(false);
-                    }}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.dropdownTitle}>
+              {employees.map((e) => (
+                <TouchableOpacity
+                  key={e._id}
+                  style={styles.employeeItem}
+                  onPress={() => {
+                    updateOrderTab((t) => (t.employeeId = e._id));
+                    setEmployeeModal(false);
+                  }}
+                >
+                  <View style={styles.employeeItemContent}>
+                    <Ionicons
+                      name="person-circle"
+                      size={20}
+                      color={
+                        currentUserEmployee?._id === e._id
+                          ? COLORS.primary
+                          : COLORS.text
+                      }
+                    />
+                    <View style={styles.employeeItemInfo}>
+                      <Text style={styles.employeeItemName}>
                         {e.fullName}
                         {currentUserEmployee?._id === e._id ? " (Bạn)" : ""}
                       </Text>
-                      <Text style={styles.hint}>ID: {e._id}</Text>
+                      <Text style={styles.employeeItemHint}>ID: {e._id}</Text>
                     </View>
-                    <Text style={styles.addHint}>Chọn</Text>
-                  </Pressable>
-                ))}
-              </ScrollView>
+                  </View>
+                  <Text style={styles.employeeItemAction}>Chọn</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
 
-              <IconTextButton
-                type="outline"
-                text="Đóng"
-                onPress={() => setEmployeeModalOpen(false)}
-                style={{ marginTop: 10 }}
-              />
-            </View>
+            <Button
+              title="Đóng"
+              variant="outline"
+              onPress={() => setEmployeeModal(false)}
+              style={styles.modalCloseButton}
+              fullWidth
+            />
           </View>
-        </Modal>
+        </View>
+      </Modal>
 
-        {/* New customer modal */}
-        <Modal
-          visible={newCustomerModalOpen}
-          transparent
-          animationType="fade"
-          onRequestClose={() => setNewCustomerModalOpen(false)}
+      {/* Customer Modal */}
+      <Modal
+        visible={newCustomerModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setNewCustomerModal(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={styles.keyboardAvoidingView}
         >
           <View style={styles.modalBackdrop}>
-            <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Thêm khách hàng</Text>
-
-              <Text style={[styles.mutedInline, { marginTop: 10 }]}>
-                Tên khách
-              </Text>
-              <TextInput
-                value={newCustomerName}
-                onChangeText={setNewCustomerName}
-                placeholder="Nhập tên..."
-                placeholderTextColor={COLORS.placeholder}
-                style={styles.input}
-              />
-
-              <Text style={[styles.mutedInline, { marginTop: 10 }]}>
-                Số điện thoại
-              </Text>
-              <TextInput
-                value={newCustomerPhone}
-                onChangeText={setNewCustomerPhone}
-                placeholder="Nhập SĐT..."
-                placeholderTextColor={COLORS.placeholder}
-                style={styles.input}
-                keyboardType="phone-pad"
-              />
-
-              <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
-                <IconTextButton
-                  type="outline"
-                  text="Huỷ"
-                  onPress={() => setNewCustomerModalOpen(false)}
-                  style={{ flex: 1 }}
-                />
-                <IconTextButton
-                  type="primary"
-                  text="Tạo"
-                  onPress={createCustomer}
-                  style={{ flex: 1 }}
+            <View style={[styles.modalContainer, styles.customerModal]}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Tìm kiếm khách hàng</Text>
+                <IconButton
+                  icon="close"
+                  onPress={() => setNewCustomerModal(false)}
+                  color={COLORS.muted}
                 />
               </View>
-            </View>
-          </View>
-        </Modal>
 
-        {/* QR modal */}
-        <Modal
-          visible={qrModalOpen}
-          transparent
-          animationType="fade"
-          onRequestClose={closeQrModal}
-        >
-          <View style={styles.modalBackdrop}>
-            <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>QR thanh toán</Text>
-              <Text style={styles.modalSubtitle}>
-                Khách quét mã để thanh toán
-              </Text>
-
-              {qrRemainingSec !== null ? (
-                <View style={[styles.infoStrip, { marginTop: 10 }]}>
-                  <Text style={styles.infoStripText}>
-                    Còn lại:{" "}
-                    {Math.floor(qrRemainingSec / 60)
-                      .toString()
-                      .padStart(2, "0")}
-                    :{(qrRemainingSec % 60).toString().padStart(2, "0")}
-                  </Text>
-                </View>
-              ) : null}
-
-              <View style={styles.qrBox}>
-                {currentTab.qrImageUrl ? (
-                  <Image
-                    source={{ uri: currentTab.qrImageUrl }}
-                    style={styles.qrImage}
-                    resizeMode="contain"
+              {/* Search */}
+              <View style={styles.customerSearchContainer}>
+                <Ionicons name="search" size={20} color={COLORS.muted} />
+                <TextInput
+                  value={phoneInput}
+                  onChangeText={onChangePhoneInput}
+                  placeholder="Tìm theo tên hoặc SĐT..."
+                  placeholderTextColor={COLORS.placeholder}
+                  style={styles.customerSearchInput}
+                  autoFocus
+                />
+                {phoneInput.length > 0 && (
+                  <IconButton
+                    icon="close-circle"
+                    onPress={() => onChangePhoneInput("")}
+                    color={COLORS.muted}
                   />
-                ) : (
-                  <Text style={styles.hint}>
-                    Không có QR (có thể đã bị tắt / hết hạn).
-                  </Text>
                 )}
               </View>
 
-              <View style={styles.modalRow}>
-                <IconTextButton
-                  type="outline"
-                  text="Đóng"
-                  onPress={closeQrModal}
-                  style={{ flex: 1 }}
-                />
-                <IconTextButton
-                  type="danger"
-                  text="In hoá đơn"
-                  onPress={async () => {
-                    if (!currentTab.pendingOrderId) {
-                      Alert.alert("Thiếu đơn hàng", "Chưa có orderId.");
-                      return;
-                    }
-                    await triggerPrintServer(currentTab.pendingOrderId);
-                  }}
-                  style={{ flex: 1 }}
-                />
-              </View>
-            </View>
-          </View>
-        </Modal>
-
-        {/* Bill modal */}
-        <Modal
-          visible={billModalOpen}
-          transparent
-          animationType="fade"
-          onRequestClose={() => setBillModalOpen(false)}
-        >
-          <View style={styles.modalBackdrop}>
-            <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Hoá đơn</Text>
-              <Text style={styles.modalSubtitle}>
-                {currentTab.pendingOrderId
-                  ? `Mã đơn: ${currentTab.pendingOrderId}`
-                  : "Chưa có đơn"}
-              </Text>
-
-              <View style={{ marginTop: 10, gap: 10 }}>
-                <View style={styles.rowBetween}>
-                  <Text style={styles.mutedInline}>Khách</Text>
-                  <Text style={styles.valueText}>
-                    {currentTab.customer?.name || "Khách vãng lai"}
-                  </Text>
-                </View>
-
-                <View style={styles.rowBetween}>
-                  <Text style={styles.mutedInline}>SĐT</Text>
-                  <Text style={styles.valueText}>
-                    {currentTab.customer?.phone || "---"}
-                  </Text>
-                </View>
-
-                <Divider />
-
-                <View style={styles.rowBetween}>
-                  <Text style={styles.mutedInline}>Tổng thanh toán</Text>
-                  <Text style={styles.totalValue}>
-                    {formatPrice(totalAmount)}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={{ marginTop: 12 }}>
-                <Text style={styles.sectionTitleMini}>Danh sách sản phẩm</Text>
-
-                <ScrollView
-                  style={{ maxHeight: 220, marginTop: 8 }}
-                  keyboardShouldPersistTaps="always"
-                >
-                  {currentTab.cart.map((i) => (
-                    <View
-                      key={i.productId}
-                      style={{
-                        paddingVertical: 10,
-                        borderBottomWidth: 1,
-                        borderBottomColor: COLORS.stroke,
-                      }}
-                    >
-                      <Text
-                        style={{ fontWeight: "900", color: COLORS.textStrong }}
-                      >
-                        {i.name}
-                      </Text>
-                      <Text style={styles.hint}>
-                        {i.quantity} × {formatPrice(getItemUnitPrice(i))} ={" "}
-                        {formatPrice(getItemUnitPrice(i) * i.quantity)}
-                      </Text>
-                    </View>
-                  ))}
-                </ScrollView>
-              </View>
-
-              <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
-                <IconTextButton
-                  type="outline"
-                  text="Đóng"
-                  onPress={() => setBillModalOpen(false)}
-                  style={{ flex: 1 }}
-                />
-                <IconTextButton
-                  type="outline"
-                  text="Xuất PDF"
-                  disabled={!currentTab.cart.length}
-                  onPress={exportBillPdfToDevice}
-                  style={{ flex: 1 }}
-                />
-                <IconTextButton
-                  type="primary"
-                  text="In"
-                  disabled={!currentTab.pendingOrderId}
-                  onPress={async () => {
-                    if (!currentTab.pendingOrderId) return;
-                    await triggerPrintServer(currentTab.pendingOrderId);
-                  }}
-                  style={{ flex: 1 }}
-                />
-              </View>
-            </View>
-          </View>
-        </Modal>
-
-        {/* Price edit modal */}
-        <Modal
-          visible={priceEditModal.visible}
-          transparent
-          animationType="fade"
-          onRequestClose={() => setPriceEditModal({ visible: false })}
-        >
-          <View style={styles.modalBackdrop}>
-            <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Tuỳ chỉnh giá</Text>
-
-              {priceEditModal.item ? (
-                <>
-                  <Text style={styles.modalSubtitle}>
-                    {priceEditModal.item.name}
-                  </Text>
-                  <Text style={styles.hint}>
-                    Số lượng: {priceEditModal.item.quantity}
-                  </Text>
-
-                  <Text style={[styles.mutedInline, { marginTop: 12 }]}>
-                    Loại giá
-                  </Text>
-
-                  <View style={styles.optionRow}>
-                    {(
-                      [
-                        "NORMAL",
-                        "VIP",
-                        "AT_COST",
-                        "CLEARANCE",
-                        "FREE",
-                      ] as SaleType[]
-                    ).map((st) => {
-                      const active =
-                        (priceEditModal.tempSaleType || "NORMAL") === st;
-
-                      return (
-                        <Pressable
-                          key={st}
-                          onPress={() => {
-                            setPriceEditModal((prev) => {
-                              const item = prev.item!;
-                              let nextOverride = prev.tempOverridePrice ?? null;
-
-                              if (st === "FREE") nextOverride = 0;
-                              if (st === "AT_COST")
-                                nextOverride = getPriceNumber(
-                                  item.cost_price || item.price
-                                );
-                              if (st === "NORMAL") nextOverride = null;
-
-                              return {
-                                ...prev,
-                                tempSaleType: st,
-                                tempOverridePrice: nextOverride,
-                              };
-                            });
-                          }}
-                          style={[
-                            styles.optionChip,
-                            active && styles.optionChipActive,
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.optionChipText,
-                              active && styles.optionChipTextActive,
-                            ]}
-                          >
-                            {SALE_TYPE_LABEL[st]}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-
-                  {["VIP", "CLEARANCE"].includes(
-                    priceEditModal.tempSaleType || "NORMAL"
-                  ) ? (
-                    <View style={{ marginTop: 12 }}>
-                      <Text style={styles.mutedInline}>Nhập giá mới (đ)</Text>
-                      <TextInput
-                        value={String(priceEditModal.tempOverridePrice ?? "")}
-                        onChangeText={(txt) => {
-                          const n = clampInt(txt, 0);
-                          setPriceEditModal((prev) => ({
-                            ...prev,
-                            tempOverridePrice: n,
-                          }));
+              {/* Results */}
+              <View style={styles.customerResultsContainer}>
+                {foundCustomers.length > 0 ? (
+                  <ScrollView keyboardShouldPersistTaps="handled">
+                    {foundCustomers.map((c) => (
+                      <TouchableOpacity
+                        key={c._id}
+                        style={styles.customerResultItem}
+                        onPress={() => {
+                          selectCustomer(c);
+                          setNewCustomerModal(false);
                         }}
-                        keyboardType="numeric"
-                        placeholder="0"
-                        placeholderTextColor={COLORS.placeholder}
-                        style={styles.input}
-                      />
-                    </View>
-                  ) : null}
-
-                  <View style={[styles.totalBox, { marginTop: 12 }]}>
-                    <Text style={styles.totalLabel}>
-                      Thành tiền sau thay đổi
-                    </Text>
-                    <Text style={styles.totalValue}>
-                      {formatPrice(
-                        computeTempUnitPrice() *
-                          (priceEditModal.item?.quantity || 1)
-                      )}
+                      >
+                        <View style={styles.customerResultContent}>
+                          <Ionicons
+                            name="person"
+                            size={20}
+                            color={COLORS.primary}
+                          />
+                          <View style={styles.customerResultInfo}>
+                            <Text style={styles.customerResultName}>
+                              {c.name}
+                            </Text>
+                            <Text style={styles.customerResultPhone}>
+                              {c.phone}
+                            </Text>
+                          </View>
+                        </View>
+                        {c._id === currentTab.customer?._id ? (
+                          <Text style={styles.customerSelectedText}>
+                            Đang chọn
+                          </Text>
+                        ) : (
+                          <Text style={styles.customerSelectText}>Chọn</Text>
+                        )}
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                ) : (
+                  <View style={styles.noResultsContainer}>
+                    <Ionicons
+                      name="people-outline"
+                      size={48}
+                      color={COLORS.muted}
+                    />
+                    <Text style={styles.noResultsText}>
+                      Không tìm thấy khách hàng
                     </Text>
                   </View>
+                )}
+              </View>
 
-                  <View
-                    style={{ flexDirection: "row", gap: 10, marginTop: 12 }}
-                  >
-                    <IconTextButton
-                      type="outline"
-                      text="Huỷ"
-                      onPress={() => setPriceEditModal({ visible: false })}
-                      style={{ flex: 1 }}
-                    />
-                    <IconTextButton
-                      type="primary"
-                      text="Áp dụng"
-                      onPress={applyPriceEdit}
-                      style={{ flex: 1 }}
-                    />
-                  </View>
-                </>
+              <Divider style={styles.modalDivider} />
+
+              {/* Create New Customer */}
+              <Text style={styles.createCustomerTitle}>Tạo khách hàng mới</Text>
+
+              <View style={styles.createCustomerForm}>
+                <Input
+                  value={newCustomerName}
+                  onChangeText={setNewCustomerName}
+                  placeholder="Tên khách hàng"
+                  style={styles.customerFormInput}
+                />
+                <Input
+                  value={newCustomerPhone}
+                  onChangeText={setNewCustomerPhone}
+                  placeholder="Số điện thoại"
+                  keyboardType="phone-pad"
+                  style={styles.customerFormInput}
+                />
+                <Input
+                  value={newCustomerEmail}
+                  onChangeText={setNewCustomerEmail}
+                  placeholder="Email (tùy chọn)"
+                  keyboardType="email-address"
+                  style={styles.customerFormInput}
+                />
+              </View>
+
+              <Button
+                title="Tạo khách hàng"
+                variant="primary"
+                onPress={createCustomer}
+                style={styles.createCustomerButton}
+                fullWidth
+              />
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* QR Modal */}
+      <Modal
+        visible={qrModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setQrModal(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalContainer}>
+            <Text style={styles.modalTitle}>QR Thanh Toán</Text>
+            <Text style={styles.modalSubtitle}>
+              Khách hàng quét mã để thanh toán
+            </Text>
+
+            {qrRemainingSec !== null && (
+              <View style={styles.qrCountdownContainer}>
+                <Text style={styles.qrCountdownText}>
+                  Còn lại:{" "}
+                  {Math.floor(qrRemainingSec / 60)
+                    .toString()
+                    .padStart(2, "0")}
+                  :{(qrRemainingSec % 60).toString().padStart(2, "0")}
+                </Text>
+              </View>
+            )}
+
+            <View style={styles.qrContainer}>
+              {currentTab.qrImageUrl ? (
+                <Image
+                  source={{ uri: currentTab.qrImageUrl }}
+                  style={styles.qrImage}
+                  resizeMode="contain"
+                />
               ) : (
-                <Text style={styles.hint}>Không có dữ liệu sản phẩm.</Text>
+                <Text style={styles.noQrText}>Không có QR</Text>
+              )}
+            </View>
+
+            <View style={styles.modalActions}>
+              <Button
+                title="Đóng"
+                variant="outline"
+                onPress={() => setQrModal(false)}
+                style={styles.modalActionButton}
+              />
+
+              {currentTab.pendingOrderId && (
+                <Button
+                  title={
+                    currentTab.isPaid ? "In hóa đơn" : "In hóa đơn (Xác nhận)"
+                  }
+                  variant={currentTab.isPaid ? "success" : "primary"}
+                  onPress={() => {
+                    setQrModal(false);
+                    triggerPrint(currentTab.pendingOrderId!, true);
+                  }}
+                  loading={isPrinting}
+                  style={styles.modalActionButton}
+                />
               )}
             </View>
           </View>
-        </Modal>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+        </View>
+      </Modal>
+
+      {/* Bill Modal */}
+      <Modal
+        visible={billModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setBillModal(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalContainer}>
+            <Text style={styles.modalTitle}>Hóa Đơn</Text>
+            <Text style={styles.modalSubtitle}>
+              {currentTab.pendingOrderId
+                ? `Mã đơn: ${currentTab.pendingOrderId}`
+                : "Chưa có đơn"}
+            </Text>
+
+            <View style={styles.billInfoContainer}>
+              <View style={styles.billInfoRow}>
+                <Text style={styles.billInfoLabel}>Khách hàng</Text>
+                <Text style={styles.billInfoValue}>
+                  {currentTab.customer?.name || "Khách vãng lai"}
+                </Text>
+              </View>
+
+              <View style={styles.billInfoRow}>
+                <Text style={styles.billInfoLabel}>SĐT</Text>
+                <Text style={styles.billInfoValue}>
+                  {currentTab.customer?.phone || "---"}
+                </Text>
+              </View>
+
+              <View style={styles.billInfoRow}>
+                <Text style={styles.billInfoLabel}>Tổng thanh toán</Text>
+                <Text style={styles.billTotalAmount}>
+                  {formatPrice(totalAmount)}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={styles.billProductsTitle}>Danh sách sản phẩm</Text>
+
+            <ScrollView style={styles.billProductsContainer}>
+              {currentTab.cart.map((item, index) => (
+                <View
+                  key={`${item.productId}_${index}`}
+                  style={styles.billProductItem}
+                >
+                  <Text style={styles.billProductName}>{item.name}</Text>
+                  <Text style={styles.billProductDetails}>
+                    {item.quantity} × {formatPrice(getItemUnitPrice(item))} ={" "}
+                    {formatPrice(getItemUnitPrice(item) * item.quantity)}
+                  </Text>
+                </View>
+              ))}
+            </ScrollView>
+
+            <View style={styles.modalActions}>
+              <Button
+                title="Đóng"
+                variant="outline"
+                onPress={() => {
+                  setBillModal(false);
+                  resetCurrentTab();
+                }}
+                style={styles.modalActionButton}
+              />
+
+              {currentTab.pendingOrderId && (
+                <Button
+                  title="In"
+                  variant="primary"
+                  onPress={() => triggerPrint(currentTab.pendingOrderId!)}
+                  loading={isPrinting}
+                  style={styles.modalActionButton}
+                />
+              )}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Price Edit Modal */}
+      <Modal
+        visible={priceEditModal.visible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPriceEditModal({ visible: false })}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalContainer}>
+            <Text style={styles.modalTitle}>Tùy chỉnh giá</Text>
+
+            {priceEditModal.item && (
+              <>
+                <Text style={styles.modalSubtitle}>
+                  {priceEditModal.item.name}
+                </Text>
+                <Text style={styles.priceEditHint}>
+                  Số lượng: {priceEditModal.item.quantity}{" "}
+                  {priceEditModal.item.unit}
+                </Text>
+
+                <Text style={styles.priceTypeLabel}>Loại giá</Text>
+
+                <View style={styles.priceTypeContainer}>
+                  {(
+                    [
+                      "NORMAL",
+                      "VIP",
+                      "AT_COST",
+                      "CLEARANCE",
+                      "FREE",
+                    ] as SaleType[]
+                  ).map((st) => {
+                    const active =
+                      (priceEditModal.tempSaleType || "NORMAL") === st;
+
+                    return (
+                      <TouchableOpacity
+                        key={st}
+                        style={[
+                          styles.priceTypeButton,
+                          active && styles.priceTypeButtonActive,
+                        ]}
+                        onPress={() => {
+                          setPriceEditModal((prev) => {
+                            const item = prev.item!;
+                            let nextOverride = prev.tempOverridePrice ?? null;
+
+                            if (st === "FREE") nextOverride = 0;
+                            if (st === "AT_COST")
+                              nextOverride = getPriceNumber(
+                                item.cost_price || item.price
+                              );
+                            if (st === "NORMAL") nextOverride = null;
+
+                            return {
+                              ...prev,
+                              tempSaleType: st,
+                              tempOverridePrice: nextOverride,
+                            };
+                          });
+                        }}
+                      >
+                        <Text
+                          style={[
+                            styles.priceTypeButtonText,
+                            active && styles.priceTypeButtonTextActive,
+                          ]}
+                        >
+                          {SALE_TYPE_LABEL[st]}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                {["VIP", "CLEARANCE"].includes(
+                  priceEditModal.tempSaleType || "NORMAL"
+                ) && (
+                  <View style={styles.customPriceContainer}>
+                    <Text style={styles.customPriceLabel}>
+                      Nhập giá mới (đ)
+                    </Text>
+                    <TextInput
+                      value={String(priceEditModal.tempOverridePrice ?? "")}
+                      onChangeText={(txt) => {
+                        const n = clampInt(txt, 0);
+                        setPriceEditModal((prev) => ({
+                          ...prev,
+                          tempOverridePrice: n,
+                        }));
+                      }}
+                      keyboardType="numeric"
+                      placeholder="0"
+                      placeholderTextColor={COLORS.placeholder}
+                      style={styles.customPriceInput}
+                    />
+                  </View>
+                )}
+
+                <View style={styles.priceEditTotal}>
+                  <Text style={styles.priceEditTotalLabel}>
+                    Thành tiền sau thay đổi
+                  </Text>
+                  <Text style={styles.priceEditTotalValue}>
+                    {formatPrice(
+                      computeTempUnitPrice() *
+                        (priceEditModal.item?.quantity || 1)
+                    )}
+                  </Text>
+                </View>
+
+                <View style={styles.modalActions}>
+                  <Button
+                    title="Hủy"
+                    variant="outline"
+                    onPress={() => setPriceEditModal({ visible: false })}
+                    style={styles.modalActionButton}
+                  />
+
+                  <Button
+                    title="Áp dụng"
+                    variant="primary"
+                    onPress={applyPriceEdit}
+                    style={styles.modalActionButton}
+                  />
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+    </View>
   );
 };
 
-export default OrderPOSHomeScreen;
-
 /** =========================================================
- *  Styles (LIGHT)
+ *  Styles
  *  ========================================================= */
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: COLORS.bg },
-
-  center: {
+  // Container Styles
+  safeContainer: {
+    flex: 1,
+    backgroundColor: COLORS.bg,
+  },
+  centerContainer: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    padding: 24,
+    padding: SPACING.xxl,
   },
-  mutedText: { color: COLORS.muted, marginTop: 10, fontWeight: "800" },
+  loadingText: {
+    marginTop: SPACING.md,
+    color: COLORS.muted,
+    fontSize: TYPOGRAPHY.md,
+    fontWeight: "500",
+  },
 
+  // Header Styles
   header: {
-    paddingHorizontal: SPACING.lg,
-    paddingTop: SPACING.md,
-    paddingBottom: SPACING.lg,
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
     backgroundColor: COLORS.surface,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.stroke,
+    zIndex: 100,
     ...SHADOW,
   },
-  headerTopRow: {
+  headerTop: {
     flexDirection: "row",
-    alignItems: "flex-end",
+    alignItems: "center",
     justifyContent: "space-between",
-    gap: 12,
+    paddingHorizontal: SPACING.lg,
+    paddingTop: Platform.OS === "ios" ? SPACING.xl : SPACING.lg,
+    paddingBottom: SPACING.sm,
   },
-  headerTitle: { color: COLORS.textStrong, fontSize: 18, fontWeight: "900" },
-  headerSub: { color: COLORS.muted, marginTop: 4, fontWeight: "800" },
+  storeInfoContainer: {
+    flex: 1,
+  },
+  storeName: {
+    fontSize: TYPOGRAPHY.lg,
+    fontWeight: "700",
+    color: COLORS.textStrong,
+  },
+  storeSubtitle: {
+    fontSize: TYPOGRAPHY.sm,
+    color: COLORS.muted,
+    marginTop: 2,
+  },
 
-  container: { padding: SPACING.lg, paddingBottom: 18, gap: SPACING.md },
-
-  // Pills (tabs)
-  pill: {
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderRadius: 999,
+  // Tabs Styles
+  tabsScrollView: {
+    paddingHorizontal: SPACING.lg,
+    marginBottom: SPACING.sm,
+  },
+  tabsContentContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SPACING.xs,
+  },
+  tabWrapper: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SPACING.xs,
+  },
+  tabButton: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.round,
     backgroundColor: COLORS.chip,
     borderWidth: 1,
     borderColor: COLORS.stroke,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
   },
-  pillActive: { backgroundColor: COLORS.chipActive, borderColor: "#93c5fd" },
-  pillText: { color: COLORS.text, fontWeight: "900" },
-  pillTextActive: { color: COLORS.primary2, fontWeight: "900" },
-
-  iconClose: {
-    width: 28,
-    height: 28,
-    borderRadius: 999,
-    backgroundColor: "#fee2e2",
-    borderWidth: 1,
-    borderColor: "#fecaca",
+  tabButtonActive: {
+    backgroundColor: COLORS.chipActive,
+    borderColor: COLORS.primary,
+  },
+  tabText: {
+    fontSize: TYPOGRAPHY.sm,
+    fontWeight: "600",
+    color: COLORS.text,
+  },
+  tabTextActive: {
+    color: COLORS.primary,
+  },
+  tabCloseButton: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: COLORS.dangerLight,
     alignItems: "center",
     justifyContent: "center",
+    borderWidth: 1,
+    borderColor: COLORS.danger,
   },
-  iconCloseText: {
-    color: "#b91c1c",
-    fontWeight: "900",
-    marginTop: -2,
-    fontSize: 16,
+  addTabButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: COLORS.primary,
+    borderStyle: "dashed",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.chipActive,
+    marginLeft: SPACING.xs,
   },
 
-  // Search
-  searchBox: {
+  // Search Styles
+  searchSection: {
+    paddingHorizontal: SPACING.lg,
+    paddingBottom: SPACING.md,
+  },
+  searchContainer: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
+    backgroundColor: COLORS.cardSecondary,
     borderRadius: RADIUS.lg,
-    backgroundColor: "#f1f5f9",
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: COLORS.stroke,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    ...SHADOW,
   },
-  searchIcon: {
-    color: COLORS.muted,
-    fontSize: 16,
-    fontWeight: "900",
-    width: 18,
-    textAlign: "center",
+  searchContainerFocused: {
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.white,
   },
   searchInput: {
     flex: 1,
-    fontWeight: "900",
-    color: COLORS.textStrong,
-    paddingVertical: 0,
+    fontSize: TYPOGRAPHY.md,
+    fontWeight: "500",
+    color: COLORS.text,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
   },
-  searchClear: {
-    width: 28,
-    height: 28,
-    borderRadius: 10,
+  clearSearchButton: {
+    padding: SPACING.xs,
+  },
+  searchActionButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: COLORS.chipActive,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#e2e8f0",
-    borderWidth: 1,
-    borderColor: "#cbd5e1",
   },
-  searchClearText: {
-    color: COLORS.text,
-    fontWeight: "900",
-    fontSize: 16,
-    marginTop: -2,
+  searchBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0, 0, 0, 0.3)",
+    zIndex: 90,
   },
 
-  // Dropdown
-  dropdown: {
-    marginTop: 10,
+  // Product Dropdown Styles
+  productDropdown: {
+    position: "absolute",
+    top: 60,
+    left: SPACING.lg,
+    right: SPACING.lg,
+    backgroundColor: COLORS.white,
     borderRadius: RADIUS.lg,
     borderWidth: 1,
-    borderColor: COLORS.stroke,
-    backgroundColor: COLORS.surface,
-    overflow: "hidden",
-    ...SHADOW,
+    borderColor: COLORS.primary,
+    maxHeight: 300,
+    zIndex: 1000,
+    ...SHADOW_LG,
   },
-  dropdownLoadingRow: {
-    padding: 14,
+  dropdownScrollView: {
+    maxHeight: 300,
+  },
+  productItem: {
     flexDirection: "row",
-    gap: 10,
     alignItems: "center",
-  },
-  dropdownItem: {
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    padding: SPACING.md,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.stroke,
-    flexDirection: "row",
-    gap: 12,
-    alignItems: "center",
   },
-  dropdownTitle: { fontWeight: "900", color: COLORS.textStrong },
-  hint: { marginTop: 4, color: COLORS.muted, fontWeight: "700", fontSize: 12 },
-  addHint: { fontWeight: "900", color: COLORS.primary },
+  productItemDisabled: {
+    opacity: 0.5,
+  },
+  productItemImageContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: RADIUS.sm,
+    overflow: "hidden",
+    marginRight: SPACING.sm,
+  },
+  productItemImage: {
+    width: "100%",
+    height: "100%",
+  },
+  productItemImagePlaceholder: {
+    width: "100%",
+    height: "100%",
+    backgroundColor: COLORS.cardSecondary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  productItemInfo: {
+    flex: 1,
+  },
+  productItemName: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: "600",
+    color: COLORS.text,
+    marginBottom: 2,
+  },
+  productItemSku: {
+    fontSize: TYPOGRAPHY.xs,
+    color: COLORS.muted,
+  },
+  productItemRight: {
+    alignItems: "flex-end",
+  },
+  productItemPrice: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: "700",
+    color: COLORS.primary,
+    marginBottom: 4,
+  },
+  stockBadge: {
+    backgroundColor: COLORS.successLight,
+    paddingHorizontal: SPACING.xs,
+    paddingVertical: 2,
+    borderRadius: RADIUS.xs,
+  },
+  stockBadgeOut: {
+    backgroundColor: COLORS.dangerLight,
+  },
+  stockText: {
+    fontSize: TYPOGRAPHY.xs,
+    fontWeight: "700",
+    color: COLORS.success,
+  },
+  stockTextOut: {
+    color: COLORS.danger,
+  },
 
-  // Section
-  sectionCard: {
-    backgroundColor: COLORS.card,
-    borderRadius: RADIUS.xl,
+  // Keyboard Avoiding
+  keyboardAvoidingView: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingTop: 180,
+    paddingHorizontal: SPACING.lg,
+    paddingBottom: SPACING.xxxl,
+    gap: SPACING.lg,
+  },
+
+  // Quick Info Bar
+  quickInfoBar: {
+    flexDirection: "row",
+    gap: SPACING.md,
+    marginBottom: SPACING.sm,
+  },
+  employeeSelector: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: COLORS.white,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.sm,
     borderWidth: 1,
     borderColor: COLORS.stroke,
+    ...SHADOW,
+  },
+  employeeIconContainer: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: COLORS.chipActive,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: SPACING.sm,
+  },
+  employeeInfo: {
+    flex: 1,
+  },
+  employeeLabel: {
+    fontSize: TYPOGRAPHY.xs,
+    color: COLORS.muted,
+    fontWeight: "600",
+    marginBottom: 2,
+  },
+  employeeName: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: "600",
+    color: COLORS.text,
+  },
+  customerInfo: {
+    flex: 1.5,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: COLORS.cardSecondary,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.sm,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+  },
+  customerIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: RADIUS.md,
+    backgroundColor: COLORS.white,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: SPACING.sm,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+  },
+  customerDetails: {
+    flex: 1,
+  },
+  customerLabel: {
+    fontSize: TYPOGRAPHY.xs,
+    color: COLORS.muted,
+    fontWeight: "600",
+    marginBottom: 2,
+  },
+  customerName: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: "700",
+    color: COLORS.text,
+  },
+  changeCustomerButton: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.xs,
+    backgroundColor: COLORS.infoLight,
+    borderRadius: RADIUS.sm,
+    borderWidth: 1,
+    borderColor: COLORS.info,
+  },
+  changeCustomerText: {
+    fontSize: TYPOGRAPHY.xs,
+    fontWeight: "700",
+    color: COLORS.info,
+  },
+
+  // Loyalty Card
+  loyaltyCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: COLORS.warningLight,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.md,
+    borderWidth: 1,
+    borderColor: COLORS.warning,
+    gap: SPACING.sm,
+  },
+  loyaltyText: {
+    flex: 1,
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: "600",
+    color: "#92400e",
+  },
+  loyaltyToggle: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.xs,
+    backgroundColor: COLORS.white,
+    borderRadius: RADIUS.sm,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+  },
+  loyaltyToggleActive: {
+    backgroundColor: COLORS.successLight,
+    borderColor: COLORS.success,
+  },
+  loyaltyToggleText: {
+    fontSize: TYPOGRAPHY.xs,
+    fontWeight: "700",
+    color: COLORS.text,
+  },
+  loyaltyToggleTextActive: {
+    color: COLORS.success,
+  },
+  pointsInputContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SPACING.xs,
+  },
+  pointsInput: {
+    width: 60,
+    backgroundColor: COLORS.white,
+    borderRadius: RADIUS.sm,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: "600",
+    color: COLORS.text,
+    textAlign: "center",
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+  },
+  maxPointsText: {
+    fontSize: TYPOGRAPHY.xs,
+    fontWeight: "700",
+    color: COLORS.primary,
+  },
+
+  // Section Styles
+  sectionContainer: {
+    backgroundColor: COLORS.white,
+    borderRadius: RADIUS.xl,
     padding: SPACING.lg,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
     ...SHADOW,
   },
   sectionHeader: {
     flexDirection: "row",
     alignItems: "flex-start",
     justifyContent: "space-between",
-    gap: 10,
+    marginBottom: SPACING.md,
   },
-  sectionTitle: { fontSize: 14, fontWeight: "900", color: COLORS.textStrong },
-  sectionTitleMini: {
-    fontSize: 13,
-    fontWeight: "900",
+  sectionTitleContainer: {
+    flex: 1,
+  },
+  sectionTitle: {
+    fontSize: TYPOGRAPHY.md,
+    fontWeight: "700",
     color: COLORS.textStrong,
+    marginBottom: 2,
   },
   sectionSubtitle: {
-    marginTop: 4,
+    fontSize: TYPOGRAPHY.sm,
     color: COLORS.muted,
-    fontWeight: "700",
-    fontSize: 12,
+  },
+  sectionContent: {
+    marginTop: SPACING.sm,
   },
 
-  valueText: { fontWeight: "900", color: COLORS.textStrong },
-
-  input: {
-    backgroundColor: "#f8fafc",
-    borderRadius: RADIUS.lg,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderWidth: 1,
-    borderColor: COLORS.stroke,
-    fontWeight: "900",
-    color: COLORS.textStrong,
-    marginTop: 6,
-  },
-
-  rowBetween: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10,
-  },
-  mutedInline: { color: COLORS.muted, fontWeight: "900" },
-
-  toggle: {
-    paddingVertical: 7,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    backgroundColor: "#f1f5f9",
-    borderWidth: 1,
-    borderColor: COLORS.stroke,
-  },
-  toggleOn: { backgroundColor: "#dcfce7", borderColor: "#bbf7d0" },
-  toggleText: { fontWeight: "900", color: COLORS.text, fontSize: 12 },
-  toggleTextOn: { color: "#166534" },
-
+  // Badge Styles
   badge: {
-    minWidth: 34,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: "#dbeafe",
-    borderWidth: 1,
-    borderColor: "#bfdbfe",
+    minWidth: 30,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+    borderRadius: RADIUS.round,
     alignItems: "center",
     justifyContent: "center",
   },
-  badgeText: { fontWeight: "900", color: "#1d4ed8" },
+  badgeText: {
+    fontSize: TYPOGRAPHY.sm,
+    fontWeight: "700",
+  },
 
-  // Cart
-  cartItem: {
-    backgroundColor: "#f8fafc",
-    borderRadius: RADIUS.xl,
+  // Empty Cart Styles
+  emptyCart: {
+    alignItems: "center",
+    paddingVertical: SPACING.xxxl,
+  },
+  emptyCartText: {
+    fontSize: TYPOGRAPHY.lg,
+    fontWeight: "600",
+    color: COLORS.muted,
+    marginTop: SPACING.md,
+  },
+  emptyCartSubtext: {
+    fontSize: TYPOGRAPHY.sm,
+    color: COLORS.muted,
+    marginTop: SPACING.xs,
+  },
+
+  // Cart Item Styles
+  cartItemCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.md,
     borderWidth: 1,
     borderColor: COLORS.stroke,
-    padding: 12,
-    flexDirection: "row",
-    gap: 12,
   },
-  cartLeft: { flex: 1 },
-  cartRight: {
-    gap: 10,
-    alignItems: "flex-end",
+  cartItemSeparator: {
+    height: SPACING.sm,
+  },
+  cartItemHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: SPACING.md,
+  },
+  cartItemImageContainer: {
+    width: 60,
+    height: 60,
+    borderRadius: RADIUS.md,
+    overflow: "hidden",
+    marginRight: SPACING.sm,
+  },
+  cartItemImage: {
+    width: "100%",
+    height: "100%",
+  },
+  cartItemImagePlaceholder: {
+    width: "100%",
+    height: "100%",
+    backgroundColor: COLORS.cardSecondary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  cartItemInfo: {
+    flex: 1,
+    marginRight: SPACING.sm,
+  },
+  cartItemName: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: "700",
+    color: COLORS.textStrong,
+    marginBottom: SPACING.xs,
+  },
+  cartItemMeta: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: SPACING.xs,
+    marginBottom: SPACING.xs,
+  },
+  cartItemSku: {
+    fontSize: TYPOGRAPHY.xs,
+    color: COLORS.muted,
+    backgroundColor: COLORS.chip,
+    paddingHorizontal: SPACING.xs,
+    paddingVertical: 2,
+    borderRadius: RADIUS.xs,
+  },
+  cartItemUnit: {
+    fontSize: TYPOGRAPHY.xs,
+    color: COLORS.muted,
+  },
+  cartItemBatch: {
+    fontSize: TYPOGRAPHY.xs,
+    color: COLORS.textSecondary,
+  },
+  cartItemExpiry: {
+    fontSize: TYPOGRAPHY.xs,
+    color: COLORS.danger,
+    marginBottom: SPACING.xs,
+  },
+  taxBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    backgroundColor: COLORS.warningLight,
+    paddingHorizontal: SPACING.xs,
+    paddingVertical: 2,
+    borderRadius: RADIUS.xs,
+    gap: 2,
+  },
+  taxText: {
+    fontSize: TYPOGRAPHY.xs,
+    color: "#92400e",
+    fontWeight: "600",
+  },
+  priceEditButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: COLORS.chip,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+    borderRadius: RADIUS.sm,
+    gap: 2,
+  },
+  priceEditText: {
+    fontSize: TYPOGRAPHY.sm,
+    fontWeight: "700",
+    color: COLORS.primary,
+  },
+  customPriceIndicator: {
+    color: COLORS.warning,
+  },
+  cartItemFooter: {
+    flexDirection: "row",
+    alignItems: "center",
     justifyContent: "space-between",
   },
-
-  cartMainRow: { flexDirection: "row", gap: 10, alignItems: "center" },
-
-  cartName: { fontWeight: "900", color: COLORS.textStrong, fontSize: 14 },
-  cartMeta: {
-    marginTop: 4,
-    color: COLORS.muted,
-    fontWeight: "700",
-    fontSize: 12,
-  },
-
-  productThumb: {
-    width: 46,
-    height: 46,
-    borderRadius: RADIUS.md,
-    backgroundColor: "#e2e8f0",
-  },
-  productThumbFallback: {
-    width: 46,
-    height: 46,
-    borderRadius: RADIUS.md,
-    backgroundColor: "#e2e8f0",
-    borderWidth: 1,
-    borderColor: "#cbd5e1",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  productThumbFallbackText: { fontWeight: "900", color: COLORS.text },
-
-  cartPillsRow: {
+  quantityControls: {
     flexDirection: "row",
-    gap: 8,
-    marginTop: 8,
-    flexWrap: "wrap",
+    gap: SPACING.xs,
   },
-
-  tagChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
+  quickQuantityButton: {
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+    backgroundColor: COLORS.chip,
+    borderRadius: RADIUS.sm,
     borderWidth: 1,
     borderColor: COLORS.stroke,
-    backgroundColor: "#ffffff",
   },
-  tagChipText: { fontWeight: "900", color: COLORS.muted, fontSize: 12 },
-
-  linkBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
+  quickQuantityText: {
+    fontSize: TYPOGRAPHY.xs,
+    fontWeight: "600",
+    color: COLORS.muted,
+  },
+  quantityContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: COLORS.cardSecondary,
+    borderRadius: RADIUS.lg,
+    padding: 2,
     borderWidth: 1,
-    borderColor: "#bfdbfe",
-    backgroundColor: "#dbeafe",
+    borderColor: COLORS.stroke,
   },
-  linkBtnText: { fontWeight: "900", color: "#1d4ed8", fontSize: 12 },
-
-  qtyRow: { flexDirection: "row", gap: 8, alignItems: "center" },
-  qtyBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: RADIUS.md,
-    backgroundColor: "#ffffff",
+  quantityButton: {
+    width: 32,
+    height: 32,
+    borderRadius: RADIUS.sm,
+    backgroundColor: COLORS.white,
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 1,
-    borderColor: COLORS.stroke,
+    ...SHADOW,
   },
-  qtyBtnText: { fontWeight: "900", color: COLORS.textStrong, fontSize: 16 },
-  qtyText: {
-    width: 30,
-    textAlign: "center",
-    fontWeight: "900",
+  quantityButtonText: {
+    fontSize: TYPOGRAPHY.lg,
+    fontWeight: "600",
     color: COLORS.textStrong,
   },
-
-  removeBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderRadius: RADIUS.md,
-    backgroundColor: "#fee2e2",
-    borderWidth: 1,
-    borderColor: "#fecaca",
-  },
-  removeBtnText: { color: "#b91c1c", fontWeight: "900", fontSize: 12 },
-
-  totalBox: {
-    borderRadius: RADIUS.xl,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: "#bfdbfe",
-    backgroundColor: "#eff6ff",
-  },
-  totalLabel: { fontWeight: "900", color: COLORS.textStrong, fontSize: 13 },
-  totalValue: {
-    fontWeight: "900",
-    color: "#1d4ed8",
-    fontSize: 18,
-    marginTop: 2,
-  },
-
-  changeBox: {
-    borderRadius: RADIUS.xl,
-    padding: 14,
-    borderWidth: 1,
-    marginTop: 10,
-  },
-
-  pmRow: { flexDirection: "row", gap: 10, marginTop: 10 },
-  pmBtn: {
-    flex: 1,
-    backgroundColor: "#f8fafc",
-    borderRadius: RADIUS.lg,
-    paddingVertical: 12,
+  quantityValueContainer: {
+    minWidth: 40,
     alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: COLORS.stroke,
   },
-  pmBtnActive: { backgroundColor: "#dbeafe", borderColor: "#bfdbfe" },
-  pmBtnText: { fontWeight: "900", color: COLORS.text },
-  pmBtnTextActive: { color: "#1d4ed8" },
-
-  // Buttons
-  btnBase: {
+  quantityValue: {
+    fontSize: TYPOGRAPHY.md,
+    fontWeight: "700",
+    color: COLORS.textStrong,
+  },
+  cartItemActions: {
     flexDirection: "row",
-    gap: 8,
     alignItems: "center",
-    justifyContent: "center",
-    borderRadius: RADIUS.lg,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
+    gap: SPACING.md,
   },
-  btnPrimary: {
-    backgroundColor: COLORS.primary,
-    borderWidth: 1,
-    borderColor: "rgba(37,99,235,0.20)",
+  cartItemSubtotal: {
+    fontSize: TYPOGRAPHY.md,
+    fontWeight: "700",
+    color: COLORS.primary,
   },
-  btnOutline: {
-    backgroundColor: "#ffffff",
-    borderWidth: 1,
-    borderColor: "#cbd5e1",
+  removeButton: {
+    padding: SPACING.xs,
+    backgroundColor: COLORS.dangerLight,
+    borderRadius: RADIUS.sm,
   },
-  btnDanger: {
-    backgroundColor: "#fee2e2",
-    borderWidth: 1,
-    borderColor: "#fecaca",
-  },
-  btnGhost: {
-    backgroundColor: "#f1f5f9",
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-  },
-  btnTextBase: { fontWeight: "900" },
-  btnTextPrimary: { color: COLORS.white },
-  btnTextOutline: { color: COLORS.textStrong },
-  btnTextDanger: { color: "#b91c1c" },
 
-  // Bottom bar
-  bottomBar: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    paddingHorizontal: SPACING.lg,
-    paddingTop: 10,
-    paddingBottom: Platform.OS === "ios" ? 18 : 12,
-    backgroundColor: COLORS.surface,
+  // Price Breakdown Styles
+  priceBreakdown: {
+    gap: SPACING.sm,
+  },
+  priceRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  priceLabel: {
+    fontSize: TYPOGRAPHY.base,
+    color: COLORS.text,
+    fontWeight: "500",
+  },
+  priceValue: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: "600",
+    color: COLORS.text,
+  },
+  priceDivider: {
+    marginVertical: SPACING.sm,
+  },
+  totalRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingTop: SPACING.sm,
     borderTopWidth: 1,
     borderTopColor: COLORS.stroke,
-    flexDirection: "row",
-    gap: 12,
-    alignItems: "flex-start",
-    ...SHADOW,
   },
-  bottomBarLabel: { color: COLORS.muted, fontWeight: "900", fontSize: 12 },
-  bottomBarTotal: {
-    color: "#1d4ed8",
-    fontWeight: "900",
-    fontSize: 18,
-    marginTop: 2,
-  },
-  bottomBarHint: {
-    color: COLORS.muted,
+  totalLabel: {
+    fontSize: TYPOGRAPHY.lg,
     fontWeight: "700",
-    fontSize: 12,
-    marginTop: 2,
+    color: COLORS.textStrong,
+  },
+  totalAmount: {
+    fontSize: TYPOGRAPHY.xxl,
+    fontWeight: "700",
+    color: COLORS.primary,
   },
 
-  bottomChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: RADIUS.lg,
-    backgroundColor: "#f8fafc",
+  // VAT Toggle Styles
+  vatToggleContainer: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: SPACING.lg,
+    paddingVertical: SPACING.sm,
+  },
+  vatLabel: {
+    fontSize: TYPOGRAPHY.base,
+    color: COLORS.text,
+    fontWeight: "500",
+  },
+  vatToggle: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.xs,
+    backgroundColor: COLORS.chip,
+    borderRadius: RADIUS.round,
     borderWidth: 1,
     borderColor: COLORS.stroke,
-    minWidth: 72,
+  },
+  vatToggleActive: {
+    backgroundColor: COLORS.successLight,
+    borderColor: COLORS.success,
+  },
+  vatToggleText: {
+    fontSize: TYPOGRAPHY.xs,
+    fontWeight: "700",
+    color: COLORS.text,
+  },
+  vatToggleTextActive: {
+    color: COLORS.success,
+  },
+
+  // VAT Info Styles
+  vatInfoContainer: {
+    marginTop: SPACING.sm,
+    gap: SPACING.sm,
+  },
+  vatInput: {
+    backgroundColor: COLORS.cardSecondary,
+    borderColor: COLORS.stroke,
+  },
+
+  // Payment Method Styles
+  paymentMethodLabel: {
+    fontSize: TYPOGRAPHY.base,
+    color: COLORS.text,
+    fontWeight: "500",
+    marginTop: SPACING.lg,
+    marginBottom: SPACING.sm,
+  },
+  paymentMethodContainer: {
+    flexDirection: "row",
+    gap: SPACING.md,
+  },
+  paymentMethodButton: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: SPACING.xs,
+    paddingVertical: SPACING.md,
+    backgroundColor: COLORS.cardSecondary,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+  },
+  paymentMethodButtonActive: {
+    backgroundColor: COLORS.chipActive,
+    borderColor: COLORS.primary,
+  },
+  paymentMethodText: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: "600",
+    color: COLORS.text,
+  },
+  paymentMethodTextActive: {
+    color: COLORS.primary,
+  },
+
+  // Cash Payment Styles
+  cashPaymentContainer: {
+    marginTop: SPACING.lg,
+    gap: SPACING.md,
+  },
+  cashReceivedLabel: {
+    fontSize: TYPOGRAPHY.base,
+    color: COLORS.text,
+    fontWeight: "500",
+  },
+  cashAmountContainer: {
+    alignItems: "flex-end",
+  },
+  cashAmountText: {
+    fontSize: TYPOGRAPHY.xxxl,
+    fontWeight: "700",
+    color: COLORS.primary,
+  },
+  quickAmountsContainer: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: SPACING.sm,
+  },
+  quickAmountButton: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    backgroundColor: COLORS.successLight,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    borderColor: COLORS.success,
+  },
+  quickAmountText: {
+    fontSize: TYPOGRAPHY.sm,
+    fontWeight: "600",
+    color: COLORS.success,
+  },
+  numpadContainer: {
+    backgroundColor: COLORS.chipActive,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.sm,
+    borderWidth: 1,
+    borderColor: "#bfdbfe",
+  },
+  numpadRow: {
+    flexDirection: "row",
+    gap: SPACING.sm,
+    marginBottom: SPACING.sm,
+  },
+  numpadButton: {
+    flex: 1,
+    height: 48,
+    backgroundColor: COLORS.white,
+    borderRadius: RADIUS.md,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+    ...SHADOW,
+  },
+  numpadButtonText: {
+    fontSize: TYPOGRAPHY.xl,
+    fontWeight: "700",
+    color: COLORS.textStrong,
+  },
+  numpadActionButton: {
+    backgroundColor: COLORS.dangerLight,
+    borderColor: COLORS.danger,
+  },
+  numpadActionText: {
+    fontSize: TYPOGRAPHY.md,
+    fontWeight: "700",
+    color: COLORS.danger,
+  },
+  changeContainer: {
+    borderRadius: RADIUS.lg,
+    padding: SPACING.md,
+    borderWidth: 1,
+    flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
   },
-  bottomChipActive: { backgroundColor: "#dbeafe", borderColor: "#bfdbfe" },
-  bottomChipText: { fontWeight: "900", color: COLORS.text },
-  bottomChipTextActive: { color: "#1d4ed8" },
+  changeLabel: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: "600",
+  },
+  changeAmountText: {
+    fontSize: TYPOGRAPHY.xl,
+    fontWeight: "700",
+  },
+  confirmPaymentButton: {
+    marginTop: SPACING.sm,
+  },
 
-  // Modal
+  // Bottom Bar Styles
+  bottomBar: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: COLORS.white,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.stroke,
+    paddingHorizontal: SPACING.lg,
+    paddingTop: SPACING.md,
+    paddingBottom: Platform.OS === "ios" ? SPACING.xxl : SPACING.xl,
+    flexDirection: "row",
+    gap: SPACING.lg,
+    ...SHADOW_LG,
+  },
+  bottomBarLeft: {
+    flex: 1,
+  },
+  bottomBarLabel: {
+    fontSize: TYPOGRAPHY.xs,
+    color: COLORS.muted,
+    fontWeight: "600",
+    marginBottom: 2,
+  },
+  bottomBarTotal: {
+    fontSize: TYPOGRAPHY.xl,
+    fontWeight: "700",
+    color: COLORS.primary,
+    marginBottom: 2,
+  },
+  bottomBarSubtext: {
+    fontSize: TYPOGRAPHY.xs,
+    color: COLORS.muted,
+  },
+  bottomBarRight: {
+    flex: 1.5,
+    gap: SPACING.sm,
+  },
+  paymentMethodChips: {
+    flexDirection: "row",
+    gap: SPACING.sm,
+  },
+  paymentMethodChip: {
+    flex: 1,
+    paddingVertical: SPACING.sm,
+    backgroundColor: COLORS.cardSecondary,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+    alignItems: "center",
+  },
+  paymentMethodChipActive: {
+    backgroundColor: COLORS.chipActive,
+    borderColor: COLORS.primary,
+  },
+  paymentMethodChipText: {
+    fontSize: TYPOGRAPHY.sm,
+    fontWeight: "700",
+    color: COLORS.text,
+  },
+  paymentMethodChipTextActive: {
+    color: COLORS.primary,
+  },
+  actionButtons: {
+    flexDirection: "row",
+    gap: SPACING.sm,
+  },
+  billButton: {
+    flex: 1,
+  },
+  createOrderButton: {
+    flex: 1.5,
+  },
+  continueQrButton: {
+    marginTop: 0,
+  },
+
+  // Bottom Spacer
+  bottomSpacer: {
+    height: 120,
+  },
+
+  // Modal Styles
   modalBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(15, 23, 42, 0.45)",
+    backgroundColor: "rgba(15, 23, 42, 0.6)",
     alignItems: "center",
     justifyContent: "center",
-    padding: 16,
+    padding: SPACING.lg,
   },
-  modalCard: {
+  modalContainer: {
     width: "100%",
-    maxWidth: 520,
-    backgroundColor: COLORS.surface,
+    maxWidth: 500,
+    backgroundColor: COLORS.white,
     borderRadius: RADIUS.xl,
-    padding: 16,
+    padding: SPACING.xl,
     borderWidth: 1,
     borderColor: COLORS.stroke,
+    ...SHADOW_LG,
+  },
+  customerModal: {
+    maxHeight: "80%",
+  },
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: SPACING.md,
+  },
+  modalTitle: {
+    fontSize: TYPOGRAPHY.lg,
+    fontWeight: "700",
+    color: COLORS.textStrong,
+    marginBottom: SPACING.xs,
+  },
+  modalSubtitle: {
+    fontSize: TYPOGRAPHY.sm,
+    color: COLORS.muted,
+    marginBottom: SPACING.lg,
+  },
+  modalScrollView: {
+    maxHeight: 300,
+    marginBottom: SPACING.lg,
+  },
+  modalCloseButton: {
+    marginTop: SPACING.md,
+  },
+  modalActions: {
+    flexDirection: "row",
+    gap: SPACING.md,
+    marginTop: SPACING.lg,
+  },
+  modalActionButton: {
+    flex: 1,
+  },
+  modalDivider: {
+    marginVertical: SPACING.lg,
+  },
+
+  // Employee Modal Styles
+  employeeItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.stroke,
+  },
+  employeeItemContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+    gap: SPACING.sm,
+  },
+  employeeItemInfo: {
+    flex: 1,
+  },
+  employeeItemName: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: "600",
+    color: COLORS.text,
+    marginBottom: 2,
+  },
+  employeeItemHint: {
+    fontSize: TYPOGRAPHY.xs,
+    color: COLORS.muted,
+  },
+  employeeItemAction: {
+    fontSize: TYPOGRAPHY.sm,
+    fontWeight: "700",
+    color: COLORS.primary,
+  },
+
+  // Customer Modal Styles
+  customerSearchContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: COLORS.cardSecondary,
+    borderRadius: RADIUS.lg,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    marginBottom: SPACING.md,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+  },
+  customerSearchInput: {
+    flex: 1,
+    fontSize: TYPOGRAPHY.base,
+    color: COLORS.text,
+    paddingHorizontal: SPACING.sm,
+  },
+  customerResultsContainer: {
+    flex: 1,
+    minHeight: 100,
+    marginBottom: SPACING.lg,
+  },
+  customerResultItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.stroke,
+  },
+  customerResultContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+    gap: SPACING.sm,
+  },
+  customerResultInfo: {
+    flex: 1,
+  },
+  customerResultName: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: "600",
+    color: COLORS.text,
+    marginBottom: 2,
+  },
+  customerResultPhone: {
+    fontSize: TYPOGRAPHY.sm,
+    color: COLORS.muted,
+  },
+  customerSelectedText: {
+    fontSize: TYPOGRAPHY.sm,
+    fontWeight: "700",
+    color: COLORS.success,
+  },
+  customerSelectText: {
+    fontSize: TYPOGRAPHY.sm,
+    fontWeight: "700",
+    color: COLORS.primary,
+  },
+  noResultsContainer: {
+    alignItems: "center",
+    paddingVertical: SPACING.xxl,
+  },
+  noResultsText: {
+    fontSize: TYPOGRAPHY.md,
+    color: COLORS.muted,
+    marginTop: SPACING.md,
+  },
+  createCustomerTitle: {
+    fontSize: TYPOGRAPHY.md,
+    fontWeight: "700",
+    color: COLORS.textStrong,
+    marginBottom: SPACING.md,
+  },
+  createCustomerForm: {
+    gap: SPACING.sm,
+    marginBottom: SPACING.lg,
+  },
+  customerFormInput: {
+    backgroundColor: COLORS.cardSecondary,
+    borderColor: COLORS.stroke,
+  },
+  createCustomerButton: {
+    marginTop: SPACING.md,
+  },
+
+  // QR Modal Styles
+  qrCountdownContainer: {
+    backgroundColor: COLORS.warningLight,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.md,
+    alignItems: "center",
+    marginBottom: SPACING.lg,
+    borderWidth: 1,
+    borderColor: COLORS.warning,
+  },
+  qrCountdownText: {
+    fontSize: TYPOGRAPHY.md,
+    fontWeight: "700",
+    color: "#92400e",
+  },
+  qrContainer: {
+    backgroundColor: COLORS.white,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.xl,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: SPACING.lg,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+  },
+  qrImage: {
+    width: 250,
+    height: 250,
+  },
+  noQrText: {
+    fontSize: TYPOGRAPHY.md,
+    color: COLORS.muted,
+    fontStyle: "italic",
+  },
+
+  // Bill Modal Styles
+  billInfoContainer: {
+    gap: SPACING.sm,
+    marginBottom: SPACING.lg,
+  },
+  billInfoRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: SPACING.xs,
+  },
+  billInfoLabel: {
+    fontSize: TYPOGRAPHY.sm,
+    color: COLORS.muted,
+  },
+  billInfoValue: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: "600",
+    color: COLORS.text,
+  },
+  billTotalAmount: {
+    fontSize: TYPOGRAPHY.lg,
+    fontWeight: "700",
+    color: COLORS.primary,
+  },
+  billProductsTitle: {
+    fontSize: TYPOGRAPHY.md,
+    fontWeight: "700",
+    color: COLORS.textStrong,
+    marginBottom: SPACING.sm,
+  },
+  billProductsContainer: {
+    maxHeight: 200,
+    marginBottom: SPACING.lg,
+  },
+  billProductItem: {
+    paddingVertical: SPACING.md,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.stroke,
+  },
+  billProductName: {
+    fontSize: TYPOGRAPHY.base,
+    fontWeight: "700",
+    color: COLORS.textStrong,
+    marginBottom: SPACING.xs,
+  },
+  billProductDetails: {
+    fontSize: TYPOGRAPHY.sm,
+    color: COLORS.muted,
+  },
+
+  // Price Edit Modal Styles
+  priceEditHint: {
+    fontSize: TYPOGRAPHY.sm,
+    color: COLORS.muted,
+    marginBottom: SPACING.lg,
+  },
+  priceTypeLabel: {
+    fontSize: TYPOGRAPHY.base,
+    color: COLORS.text,
+    fontWeight: "500",
+    marginBottom: SPACING.sm,
+  },
+  priceTypeContainer: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: SPACING.sm,
+    marginBottom: SPACING.lg,
+  },
+  priceTypeButton: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    backgroundColor: COLORS.chip,
+    borderRadius: RADIUS.round,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+  },
+  priceTypeButtonActive: {
+    backgroundColor: COLORS.chipActive,
+    borderColor: COLORS.primary,
+  },
+  priceTypeButtonText: {
+    fontSize: TYPOGRAPHY.sm,
+    fontWeight: "600",
+    color: COLORS.text,
+  },
+  priceTypeButtonTextActive: {
+    color: COLORS.primary,
+  },
+  customPriceContainer: {
+    marginBottom: SPACING.lg,
+  },
+  customPriceLabel: {
+    fontSize: TYPOGRAPHY.base,
+    color: COLORS.text,
+    fontWeight: "500",
+    marginBottom: SPACING.xs,
+  },
+  customPriceInput: {
+    backgroundColor: COLORS.cardSecondary,
+    borderColor: COLORS.stroke,
+  },
+  priceEditTotal: {
+    backgroundColor: COLORS.cardSecondary,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.lg,
+    marginBottom: SPACING.lg,
+  },
+  priceEditTotalLabel: {
+    fontSize: TYPOGRAPHY.sm,
+    color: COLORS.text,
+    fontWeight: "500",
+    marginBottom: SPACING.xs,
+  },
+  priceEditTotalValue: {
+    fontSize: TYPOGRAPHY.xxl,
+    fontWeight: "700",
+    color: COLORS.primary,
+  },
+
+  // Card Component
+  card: {
+    backgroundColor: COLORS.white,
+    borderRadius: RADIUS.lg,
     ...SHADOW,
   },
-  modalTitle: { fontSize: 16, fontWeight: "900", color: COLORS.textStrong },
-  modalSubtitle: { marginTop: 6, color: COLORS.muted, fontWeight: "800" },
-  modalRow: { flexDirection: "row", gap: 10, marginTop: 12 },
 
-  qrBox: {
-    marginTop: 12,
-    borderRadius: RADIUS.xl,
-    borderWidth: 1,
-    borderColor: COLORS.stroke,
-    backgroundColor: "#f8fafc",
-    padding: 12,
+  // Icon Button Component
+  iconButton: {
+    padding: SPACING.xs,
+    borderRadius: RADIUS.sm,
+  },
+
+  // Button Component Styles
+  buttonBase: {
+    borderRadius: RADIUS.lg,
     alignItems: "center",
     justifyContent: "center",
   },
-  qrImage: { width: 280, height: 280 },
-
-  infoStrip: {
-    borderRadius: RADIUS.lg,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderWidth: 1,
-    borderColor: "#fde68a",
-    backgroundColor: "#fffbeb",
+  buttonContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
   },
-  infoStripText: { fontWeight: "900", color: "#92400e" },
+  buttonIcon: {
+    marginHorizontal: SPACING.xs,
+  },
+  buttonText: {
+    fontWeight: "600",
+  },
 
-  optionRow: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 10 },
-  optionChip: {
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    backgroundColor: "#f8fafc",
+  // Input Component Styles
+  inputContainer: {
+    marginBottom: SPACING.sm,
+  },
+  inputLabel: {
+    fontSize: TYPOGRAPHY.sm,
+    color: COLORS.text,
+    fontWeight: "500",
+    marginBottom: SPACING.xs,
+  },
+  inputWrapper: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: COLORS.cardSecondary,
+    borderRadius: RADIUS.lg,
     borderWidth: 1,
     borderColor: COLORS.stroke,
+    paddingHorizontal: SPACING.md,
   },
-  optionChipActive: { backgroundColor: "#dbeafe", borderColor: "#bfdbfe" },
-  optionChipText: { fontWeight: "900", color: COLORS.text, fontSize: 12 },
-  optionChipTextActive: { color: "#1d4ed8" },
+  inputError: {
+    borderColor: COLORS.danger,
+  },
+  inputDisabled: {
+    opacity: 0.6,
+  },
+  inputLeftIcon: {
+    marginRight: SPACING.sm,
+  },
+  inputRightIcon: {
+    marginLeft: SPACING.sm,
+  },
+  inputField: {
+    flex: 1,
+    fontSize: TYPOGRAPHY.base,
+    color: COLORS.text,
+    paddingVertical: SPACING.sm,
+  },
+  inputErrorText: {
+    fontSize: TYPOGRAPHY.xs,
+    color: COLORS.danger,
+    marginTop: SPACING.xs,
+  },
 });
+
+export default OrderPOSHomeScreen;
